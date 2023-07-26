@@ -11,7 +11,15 @@ import matplotlib.pyplot as plt
 from skimage.registration import phase_cross_correlation as register_translation
 from scipy.ndimage import shift, gaussian_filter, center_of_mass
 from numpy.fft import fft2, fftshift
+from tools.propagators import fft2c, ifft2c
+import scipy.ndimage as ndi
 
+plt.rcParams['text.usetex'] = True
+# plt.rcParams['font.size'] = 15
+# plt.rcParams['legend.fontsize'] = 18
+plt.rcParams['xtick.direction'] = 'in'
+plt.rcParams['ytick.direction'] = 'in'
+plt.rcParams['font.family'] = 'serif'
 
 def binning(arr, binFactor):
     shape = (arr.shape[0] // binFactor, binFactor,
@@ -613,6 +621,26 @@ def spiral_blade_mask(wavelength=13.5e-9, f=0.6e-3, N=256, dx=10e-9, n_blades=3,
     return binary
 
 
+def remove_phase_ramp(myObject):
+    # find center of mass
+    ftobj = fft2c(myObject) * np.conj(fft2c(myObject))
+    ftobj = np.real(ftobj)
+    cy, cx = ndi.center_of_mass(ftobj)
+    # re_center using fft or
+    object_1_centered1 = ifft2c(re_center_ptychogram(fft2c(myObject), center_coord=np.array([cy, cx])))
+
+    # using phase ramp multiplication
+    No = myObject.shape[-1]
+    xp = np.linspace(-No // 2, No // 2, No)
+    Xp, Yp = np.meshgrid(xp, xp)
+    xcoord = (Xp - np.amin(Xp))
+    ycoord = (Yp - np.amin(Yp))
+    thetax = -(cx - No // 2)
+    thetay = -(cy - No // 2)
+    phase_ramp = np.exp(1.j * (2 * np.pi / No) * xcoord * thetax) * np.exp(1.j * (2 * np.pi / No) * ycoord * thetay)
+    object_1_centered2 = myObject * phase_ramp
+    return object_1_centered1, object_1_centered2
+
 
 def crop(data, center_coordinate):
     if center_coordinate[0] < data.shape[0] / 2:
@@ -629,9 +657,9 @@ def re_center_ptychogram(data, center_coord):
     """
     re-centers ptychogram to a given center_coord
     """
-    center_coord = center_coord.astype(np.int32)
+    center_coord = np.around(center_coord, decimals=0)#.astype(np.int32)
     shape = data.shape
-    centered = np.zeros(shape)
+    centered = np.zeros_like(data)
 
     if center_coord[0] <= shape[0] / 2:
         ylen = 2 * center_coord[0]
@@ -842,3 +870,191 @@ def FRC(image_1, image_2, filter=True, global_phase_pos=None, filter_radius=100,
         frc[r-1] = np.sum(ring * conj_image1 * fft_image2) / np.sqrt(np.sum(ring * np.abs(fft_image1)**2) * np.sum(ring * np.abs(fft_image2)**2))
 
     return frc, one_bit_crit, half_bit_crit, error(image_1, image_2)
+
+
+class MyFRC:
+    def __init__(self, object1, object2, dx):
+        self.object1 = object1
+        self.object2 = object2
+        self.dx = dx
+    
+
+    def show_raw_data(self):
+        # plot raw data
+        fig, axes = plt.subplots(1, 2)
+        axes = axes.flatten()
+        fig.suptitle('raw files')
+        axes[0].imshow(complex2rgb(self.object1))
+        axes[0].set_axis_off()
+        axes[1].imshow(complex2rgb(self.object2))
+        axes[1].set_axis_off()
+        fig.show()
+
+    def normalize_amplitude(self):
+        # normalized amplitude
+        self.object1 /= np.abs(self.object1).mean()
+        self.object2 /= np.abs(self.object2).mean()
+
+    def remove_global_phase_from_point(self, px=0, py=0):
+        # same phase
+        ref_phase = np.angle(self.object1[py, px])
+        self.object1 *= np.exp(-1j * ref_phase)
+        self.object2 *= np.exp(-1j * ref_phase)
+
+    def remove_global_phase_from_avg_region(self, region):
+        # same phase
+        ref_phase = np.angle(self.object1[region])
+        ref_phase = np.mean(ref_phase)
+        self.object1 *= np.exp(-1j * ref_phase)
+        self.object2 *= np.exp(-1j * ref_phase)
+
+    def remove_phase_ramp(self):
+        # remove phase ramp
+        self.obj1_v1, self.obj1_v2 = remove_phase_ramp(self.object1)
+        self.obj2_v1, self.obj2_v2 = remove_phase_ramp(self.object2)
+        self.results_phase_ramp = [[self.object1, self.obj1_v1, self.obj1_v2],
+                                   [self.object2, self.obj2_v1, self.obj2_v2]]
+
+    def show_comparison_after_phase_ramp_removal(self, id=0):
+        if id == 0:  # show for obj1    
+            before = self.object1
+            v1 = self.obj1_v1
+            v2 = self.obj1_v2
+        if id == 1:  # show for obj1    
+            before = self.object2
+            v1 = self.obj1_v1
+            v2 = self.obj2_v2
+
+        # show comparison raw, centered 1, centered 2
+        fig, axes = plt.subplots(1, 3)
+        axes = axes.flatten()
+        fig.suptitle(f'phase ramp removal object {id+1:.0f}')
+        axes[0].set_title('original')
+        axes[0].imshow(complex2rgb(before))
+        axes[0].set_axis_off()
+        axes[1].set_title('V1')
+        axes[1].imshow(complex2rgb(v1))
+        axes[1].set_axis_off()
+        axes[2].set_title('V2')
+        axes[2].imshow(complex2rgb(v2))
+        axes[2].set_axis_off()
+        fig.tight_layout()
+        fig.show()
+
+    def choose_phase_ramp_result(self, id=0, result=0):
+        """
+        :param id: 0 for 0bjec1, 1 for object 2 
+        :param result: 0,1,2 [original, v1, v2] see plot_comparison_after_phase_ramp_removal
+        :return: None
+        """
+        if id == 0:
+            self.object1p = self.results_phase_ramp[id][result]
+        if id == 1:
+            self.object2p = self.results_phase_ramp[id][result]
+
+    def align_objects(self):
+        # align objects
+        # check error metric before shift
+        error_bs = error(self.object1p, self.object2p)
+        # First check if both images have the same center:
+        # check using amplitude
+        shift_distance1 = register_translation(np.abs(self.object1p), np.abs(self.object2p), upsample_factor=100)[0]
+        print("Shift distance amp: " + str(shift_distance1))
+        # check using phase
+        shift_distance2 = register_translation(np.angle(self.object1p), np.angle(self.object2p), upsample_factor=100)[0]
+        print("Shift distance phase: " + str(shift_distance2))
+
+        # shift_distance += np.array([0, .3])
+        temp = shift(np.real(self.object2p), shift_distance2, order=5) + 1j * shift(np.imag(self.object2p),
+                                                                                    shift_distance2,
+                                                                                    order=5)
+
+        # check error after shift
+        error_as = error(self.object1p, temp)
+        print(f'error before shift: {error_bs}\n'
+              f'error after shift: {error_as}')
+        if error_as < error_bs:
+            self.object2p = temp
+
+    def show_centered_objects(self):
+        fig, axes = plt.subplots(1, 3)
+        axes = axes.flatten()
+        fig.suptitle('aligned objects')
+        axes[0].imshow(complex2rgb(self.object1p))
+        axes[0].set_axis_off()
+        axes[1].imshow(complex2rgb(self.object2p))
+        axes[1].set_axis_off()
+        axes[2].set_title('abs difference')
+        im=axes[2].imshow(np.abs(self.object1p) - np.abs(self.object2p), cmap='twilight')
+        axes[2].set_axis_off()
+        fig.colorbar(im, ax=axes[2], shrink=0.9)
+        fig.tight_layout()
+        fig.show()
+
+    def clip_filter_objects(self, filter_radius=None):
+        if filter_radius is None:
+            # clip/filter region
+            N = self.object1p.shape[-1] // 2
+            filter_radius = int(N * 0.4)
+
+        # region = np.zeros_like(object_1)
+        # region[N-W//2:N+W//2,N-W//2:N+W//2] = 1.0
+        # object_2 *= region
+        # object_1 *= region
+        self.object_1c = cropCenter(self.object1p, 2 * filter_radius)
+        self.object_2c = cropCenter(self.object2p, 2 * filter_radius)
+
+    def show_clipped_objects(self):
+        fig, axes = plt.subplots(1, 2)
+        axes = axes.flatten()
+        fig.suptitle('clipped objects')
+        axes[0].imshow(complex2rgb(self.object_1c))
+        axes[0].set_axis_off()
+        axes[1].imshow(complex2rgb(self.object_2c))
+        axes[1].set_axis_off()
+        fig.tight_layout()
+        fig.show()
+    
+    def calculateFRC(self):
+        y_shape = self.object_1c.shape[0]
+        x_shape = self.object_1c.shape[1]
+        R = self.object_1c.shape[0] / 2
+        
+        window_func = np.hanning(y_shape).reshape(1, -1) * np.hanning(x_shape).reshape(-1, 1)
+        
+        fft_image1 = fftshift(fft2(fftshift(self.object_1c * window_func)))
+        fft_image2 = fftshift(fft2(fftshift(self.object_2c * window_func)))
+        fft_image1 /= np.max(np.abs(fft_image1))
+        fft_image2 /= np.max(np.abs(fft_image2))
+        conj_image1 = np.conj(fft_image1)
+
+        self.frc = np.zeros(int(np.min([x_shape, y_shape]) / 2), dtype=complex)
+        self.one_bit_crit = np.zeros_like(self.frc)
+        self.half_bit_crit = np.zeros_like(self.frc)
+    
+        for r in range(int(R)):
+            r += 1
+            ring = ringfunc(r, x_shape, y_shape)
+            self.one_bit_crit[r-1] = one_bit_criterion(np.sum(ring))
+            self.half_bit_crit[r-1] = half_bit_criterion(np.sum(ring))
+            # check complex value/real value
+            self.frc[r-1] = np.sum(ring * conj_image1 * fft_image2) / np.sqrt(np.sum(ring * np.abs(fft_image1)**2) * np.sum(ring * np.abs(fft_image2)**2))
+    
+
+    def plotFRC(self):
+        n_ticks = 5
+        fig, ax = plt.subplots(nrows=1, ncols=1, figsize=(4, 3), dpi=150)
+        fig.suptitle(f'FRC')
+        ax.plot(self.frc, label=f'FRC')
+        ax.plot(self.half_bit_crit, '--', label='1/2 bit')
+        qmax = 1 / (2 * self.dx * 1e6)
+        Fx = np.round(np.linspace(0, qmax, n_ticks), decimals=1)
+        # labels = np.round(1 / (2 * Fx), decimals=2)
+        plt.xticks(np.linspace(0, len(self.frc), n_ticks), labels=Fx)
+        ax.set_ylabel('FRC')
+        ax.set_xlabel(r'Spatial freq. ($\mu m^{-1}$)')
+        ax.grid(alpha=0.5)
+        ax.minorticks_on()
+        ax.legend()
+        fig.tight_layout()
+        fig.show()
