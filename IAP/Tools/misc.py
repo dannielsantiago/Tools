@@ -873,12 +873,47 @@ def FRC(image_1, image_2, filter=True, global_phase_pos=None, filter_radius=100,
 
 
 class MyFRC:
+    """
+    Example to use:
+    myFRC = MyFRC(object_1, object_2, dx)
+    myFRC.show_raw_data()
+    myFRC.normalize_amplitude()
+    myFRC.remove_phase_ramp()
+    myFRC.show_comparison_after_phase_ramp_removal(id=0)
+    myFRC.show_comparison_after_phase_ramp_removal(id=1)
+
+    #based on plotted results, choose the best result for each object
+    myFRC.choose_phase_ramp_result(id=0, result=0)
+    myFRC.choose_phase_ramp_result(id=1, result=0)
+
+    region = slice(0,50), slice(0,50)
+    myFRC.remove_global_phase_from_avg_region(region)
+
+    myFRC.align_objects()
+    myFRC.show_centered_objects()
+    myFRC.clip_filter_objects(filter_radius=180)
+    myFRC.show_clipped_objects()
+    myFRC.calculateFRC()
+    myFRC.plotFRC()
+    myFRC.get_spatial_resolution()
+    """
     def __init__(self, object1, object2, dx):
         self.object1 = object1
         self.object2 = object2
         self.dx = dx
-    
+        self._match_shape()
 
+    def _match_shape(self):
+        s1 = self.object1.shape
+        s2 = self.object2.shape
+        min_shape = min(s1,s2)
+        if s1 != min_shape:
+            # crop obj1 to obj2's shape
+            self.object1 = cropCenter(self.object1,size=min_shape[0])  
+        if s2 != min_shape:
+            #crop obj2 to obj1's shape
+            self.object2 = cropCenter(self.object2, size=min_shape[0])
+    
     def show_raw_data(self):
         # plot raw data
         fig, axes = plt.subplots(1, 2)
@@ -894,19 +929,26 @@ class MyFRC:
         # normalized amplitude
         self.object1 /= np.abs(self.object1).mean()
         self.object2 /= np.abs(self.object2).mean()
+        N = self.object1.shape[-1] // 2
+        W = int(N * 0.4)
+        self.object1 /= np.abs(self.object1[N-W//2:N+W//2,N-W//2:N+W//2]).mean()
+        self.object2 /= np.abs(self.object2[N-W//2:N+W//2,N-W//2:N+W//2]).mean()
 
     def remove_global_phase_from_point(self, px=0, py=0):
         # same phase
-        ref_phase = np.angle(self.object1[py, px])
-        self.object1 *= np.exp(-1j * ref_phase)
-        self.object2 *= np.exp(-1j * ref_phase)
+        ref_phase = np.angle(self.object1p[py, px])
+        self.object1p *= np.exp(-1j * ref_phase)
+        ref_phase = np.angle(self.object2p[py, px])
+        self.object2p *= np.exp(-1j * ref_phase)
 
     def remove_global_phase_from_avg_region(self, region):
         # same phase
-        ref_phase = np.angle(self.object1[region])
+        ref_phase = np.angle(self.object1p[region])
         ref_phase = np.mean(ref_phase)
-        self.object1 *= np.exp(-1j * ref_phase)
-        self.object2 *= np.exp(-1j * ref_phase)
+        self.object1p *= np.exp(-1j * ref_phase)
+        ref_phase = np.angle(self.object2p[region])
+        ref_phase = np.mean(ref_phase)
+        self.object2p *= np.exp(-1j * ref_phase)
 
     def remove_phase_ramp(self):
         # remove phase ramp
@@ -922,7 +964,7 @@ class MyFRC:
             v2 = self.obj1_v2
         if id == 1:  # show for obj1    
             before = self.object2
-            v1 = self.obj1_v1
+            v1 = self.obj2_v1
             v2 = self.obj2_v2
 
         # show comparison raw, centered 1, centered 2
@@ -953,20 +995,27 @@ class MyFRC:
             self.object2p = self.results_phase_ramp[id][result]
 
     def align_objects(self):
+        N = self.object1p.shape[-1] // 2
+        W = int(N * 0.4)
+        region = np.zeros_like(self.object1p)
+        region[N-W//2:N+W//2,N-W//2:N+W//2] = 1.0
+        object_2 = self.object1p * region
+        object_1 = self.object2p * region
+
         # align objects
         # check error metric before shift
         error_bs = error(self.object1p, self.object2p)
         # First check if both images have the same center:
         # check using amplitude
-        shift_distance1 = register_translation(np.abs(self.object1p), np.abs(self.object2p), upsample_factor=100)[0]
+        shift_distance1 = register_translation(np.abs(object_1), np.abs(object_2), upsample_factor=100)[0]
         print("Shift distance amp: " + str(shift_distance1))
         # check using phase
-        shift_distance2 = register_translation(np.angle(self.object1p), np.angle(self.object2p), upsample_factor=100)[0]
+        shift_distance2 = register_translation(np.angle(object_1), np.angle(object_2), upsample_factor=100)[0]
         print("Shift distance phase: " + str(shift_distance2))
-
+        shift_distance = shift_distance1
         # shift_distance += np.array([0, .3])
-        temp = shift(np.real(self.object2p), shift_distance2, order=5) + 1j * shift(np.imag(self.object2p),
-                                                                                    shift_distance2,
+        temp = shift(np.real(self.object2p), shift_distance, order=5) + 1j * shift(np.imag(self.object2p),
+                                                                                    shift_distance,
                                                                                     order=5)
 
         # check error after shift
@@ -975,6 +1024,7 @@ class MyFRC:
               f'error after shift: {error_as}')
         if error_as < error_bs:
             self.object2p = temp
+        # self.object2p = temp
 
     def show_centered_objects(self):
         fig, axes = plt.subplots(1, 3)
@@ -985,7 +1035,8 @@ class MyFRC:
         axes[1].imshow(complex2rgb(self.object2p))
         axes[1].set_axis_off()
         axes[2].set_title('abs difference')
-        im=axes[2].imshow(np.abs(self.object1p) - np.abs(self.object2p), cmap='twilight')
+        difference = np.abs(self.object1p)**2 - np.abs(self.object2p)**2 #/ np.abs(self.object2p)**2
+        im=axes[2].imshow(difference, cmap='twilight')
         axes[2].set_axis_off()
         fig.colorbar(im, ax=axes[2], shrink=0.9)
         fig.tight_layout()
@@ -996,11 +1047,6 @@ class MyFRC:
             # clip/filter region
             N = self.object1p.shape[-1] // 2
             filter_radius = int(N * 0.4)
-
-        # region = np.zeros_like(object_1)
-        # region[N-W//2:N+W//2,N-W//2:N+W//2] = 1.0
-        # object_2 *= region
-        # object_1 *= region
         self.object_1c = cropCenter(self.object1p, 2 * filter_radius)
         self.object_2c = cropCenter(self.object2p, 2 * filter_radius)
 
@@ -1039,7 +1085,6 @@ class MyFRC:
             self.half_bit_crit[r-1] = half_bit_criterion(np.sum(ring))
             # check complex value/real value
             self.frc[r-1] = np.sum(ring * conj_image1 * fft_image2) / np.sqrt(np.sum(ring * np.abs(fft_image1)**2) * np.sum(ring * np.abs(fft_image2)**2))
-    
 
     def plotFRC(self):
         n_ticks = 5
@@ -1047,9 +1092,8 @@ class MyFRC:
         fig.suptitle(f'FRC')
         ax.plot(self.frc, label=f'FRC')
         ax.plot(self.half_bit_crit, '--', label='1/2 bit')
-        qmax = 1 / (2 * self.dx * 1e6)
-        Fx = np.round(np.linspace(0, qmax, n_ticks), decimals=1)
-        # labels = np.round(1 / (2 * Fx), decimals=2)
+        self.qmax = 1 / (2 * self.dx * 1e6)
+        Fx = np.round(np.linspace(0, self.qmax, n_ticks), decimals=1)
         plt.xticks(np.linspace(0, len(self.frc), n_ticks), labels=Fx)
         ax.set_ylabel('FRC')
         ax.set_xlabel(r'Spatial freq. ($\mu m^{-1}$)')
@@ -1058,3 +1102,15 @@ class MyFRC:
         ax.legend()
         fig.tight_layout()
         fig.show()
+
+    def get_spatial_resolution(self):
+        #half bit criteria
+        qm = np.linspace(0, self.qmax, self.frc.shape[-1])
+        index = np.argwhere(self.frc < self.half_bit_crit)
+        if len(index) > 0:
+            index= index[0]
+            res = 1 / (2 * qm[index])  # (um)
+        else:
+            res = 1 / (2 * qm[-1])  # (um)
+        print(f'resolution: {res} um')
+        return res
