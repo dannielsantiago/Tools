@@ -996,7 +996,7 @@ class MyFRC:
 
     def align_objects(self):
         N = self.object1p.shape[-1] // 2
-        W = int(N * 0.4)
+        W = int(N * 1)
         region = np.zeros_like(self.object1p)
         region[N-W//2:N+W//2,N-W//2:N+W//2] = 1.0
         object_2 = self.object1p * region
@@ -1087,14 +1087,14 @@ class MyFRC:
             self.frc[r-1] = np.sum(ring * conj_image1 * fft_image2) / np.sqrt(np.sum(ring * np.abs(fft_image1)**2) * np.sum(ring * np.abs(fft_image2)**2))
 
     def plotFRC(self):
-        n_ticks = 5
+        n_ticks = 10
         fig, ax = plt.subplots(nrows=1, ncols=1, figsize=(4, 3), dpi=150)
         fig.suptitle(f'FRC')
         ax.plot(self.frc, label=f'FRC')
         ax.plot(self.half_bit_crit, '--', label='1/2 bit')
         self.qmax = 1 / (2 * self.dx * 1e6)
-        Fx = np.round(np.linspace(0, self.qmax, n_ticks), decimals=1)
-        plt.xticks(np.linspace(0, len(self.frc), n_ticks), labels=Fx)
+        self.Fx = np.round(np.linspace(0, self.qmax, n_ticks), decimals=3)
+        plt.xticks(np.linspace(0, len(self.frc), n_ticks), labels=self.Fx)
         ax.set_ylabel('FRC')
         ax.set_xlabel(r'Spatial freq. ($\mu m^{-1}$)')
         ax.grid(alpha=0.5)
@@ -1114,3 +1114,6 @@ class MyFRC:
             res = 1 / (2 * qm[-1])  # (um)
         print(f'resolution: {res} um')
         return res
+
+if __name__ == "__main__":
+    pass

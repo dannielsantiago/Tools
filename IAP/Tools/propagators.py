@@ -584,3 +584,5 @@ def precalc_prop_np(u, shape, lmb, z, dl, sx=0, sy=0, x0=0, y0=0,
     return ifft2c(fft2c(u) * propagator)
     # return np.fft.ifftshift(propagator)
 
+if __name__ == "__main__":
+    pass
