@@ -115,6 +115,19 @@ def circ(x, y, D):
     circle = (x ** 2 + y ** 2) < (D / 2) ** 2
     return circle
 
+def circ_px(N, D):
+    """
+    generate a circle on a 2D grid
+    :param x: 2D x coordinate, normally calculated from meshgrid: x,y = np.meshgird((,))
+    :param y: 2D y coordinate, normally calculated from meshgrid: x,y = np.meshgird((,))
+    :param D: diameter
+    :return: a 2D array
+    """
+    xp = np.linspace(-N//2, N//2, N)
+    x,y = np.meshgrid(xp, xp)
+    circle = (x ** 2 + y ** 2) < (D / 2) ** 2
+    return circle
+
 def rect(arr, threshold = 0.5):
     """
     generate a binary array containing a rectangle on a 2D grid
