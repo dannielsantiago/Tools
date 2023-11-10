@@ -8,7 +8,7 @@ Created on Thu Apr 23 22:20:38 2020
 import numpy as np
 from scipy.sparse.linalg import svds
 from scipy import linalg
-from tools.misc import circ, rect
+from misc import circ, rect
 
 
 def ifft2c(array):

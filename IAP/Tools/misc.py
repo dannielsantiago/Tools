@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 from skimage.registration import phase_cross_correlation as register_translation
 from scipy.ndimage import shift, gaussian_filter, center_of_mass
 from numpy.fft import fft2, fftshift
-from tools.propagators import fft2c, ifft2c
+from propagators import fft2c, ifft2c
 import scipy.ndimage as ndi
 
 plt.rcParams['text.usetex'] = True
