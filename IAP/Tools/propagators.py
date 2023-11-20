@@ -8,8 +8,27 @@ Created on Thu Apr 23 22:20:38 2020
 import numpy as np
 from scipy.sparse.linalg import svds
 from scipy import linalg
-from misc import circ, rect
 
+def circ(x, y, D):
+    """
+    generate a circle on a 2D grid
+    :param x: 2D x coordinate, normally calculated from meshgrid: x,y = np.meshgird((,))
+    :param y: 2D y coordinate, normally calculated from meshgrid: x,y = np.meshgird((,))
+    :param D: diameter
+    :return: a 2D array
+    """
+    circle = (x ** 2 + y ** 2) < (D / 2) ** 2
+    return circle
+
+def rect(arr, threshold = 0.5):
+    """
+    generate a binary array containing a rectangle on a 2D grid
+    :param x: 2D x coordinate, normally calculated from meshgrid: x,y = np.meshgird((,))
+    :param threshold: threshold value to binarilize the input array, default value 0.5
+    :return: a binary array
+    """
+    arr = abs(arr)
+    return arr<threshold
 
 def ifft2c(array):
     """

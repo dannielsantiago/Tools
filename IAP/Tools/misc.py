@@ -11,7 +11,6 @@ import matplotlib.pyplot as plt
 from skimage.registration import phase_cross_correlation as register_translation
 from scipy.ndimage import shift, gaussian_filter, center_of_mass
 from numpy.fft import fft2, fftshift
-from propagators import fft2c, ifft2c
 import scipy.ndimage as ndi
 
 plt.rcParams['text.usetex'] = True
@@ -20,6 +19,30 @@ plt.rcParams['text.usetex'] = True
 plt.rcParams['xtick.direction'] = 'in'
 plt.rcParams['ytick.direction'] = 'in'
 plt.rcParams['font.family'] = 'serif'
+
+
+def ifft2c(array):
+    """
+    performs 2 - dimensional inverse Fourier transformation, where energy is reserved abs(G)**2==abs(fft2c(g))**2
+    if G is two - dimensional, fft2c(G) yields the 2D iDFT of G
+    if G is multi - dimensional, fft2c(G) yields the 2D iDFT of G along the last two axes
+    :param array:
+    :return:
+    """
+    return np.fft.fftshift(np.fft.ifft2(np.fft.ifftshift(array), norm='ortho'))
+
+
+def fft2c(array):
+    """
+    performs 2 - dimensional unitary Fourier transformation, where energy is reserved abs(g)**2==abs(fft2c(g))**2
+    if g is two - dimensional, fft2c(g) yields the 2D DFT of g
+    if g is multi - dimensional, fft2c(g) yields the 2D DFT of g along the last two axes
+    :param array:
+    :return:
+    """
+    return np.fft.fftshift(np.fft.fft2(np.fft.ifftshift(array), norm='ortho'))
+
+
 
 def binning(arr, binFactor):
     shape = (arr.shape[0] // binFactor, binFactor,
