@@ -141,15 +141,27 @@ def circ(x, y, D):
 def circ_px(N, D):
     """
     generate a circle on a 2D grid
-    :param x: 2D x coordinate, normally calculated from meshgrid: x,y = np.meshgird((,))
-    :param y: 2D y coordinate, normally calculated from meshgrid: x,y = np.meshgird((,))
-    :param D: diameter
+    :param N: lateral size of array in px
+    :param D: diameter in px
     :return: a 2D array
     """
     xp = np.linspace(-N//2, N//2, N)
     x,y = np.meshgrid(xp, xp)
     circle = (x ** 2 + y ** 2) < (D / 2) ** 2
     return circle
+
+def rect_px(N, D):
+    """
+    generate a rectngle on a 2D grid
+    :param N: lateral size of array in px
+    :param D: lateral size of square in px
+    :return: a 2D array
+    """
+    xp = np.linspace(-N//2, N//2, N)
+    x,y = np.meshgrid(xp, xp)
+    arr = np.logical_and(abs(x) < (D / 2), abs(y) < (D / 2))
+    return arr
+
 
 def rect(arr, threshold = 0.5):
     """
@@ -729,13 +741,16 @@ def cropCenter(ptychogram, size, shift_x=None, shift_y=None):
     startx = x // 2 - (size // 2)
 
     startx += 1
-    starty = startx
+    starty = startx + 0
     if shift_x is not None:
         startx += shift_x
     if shift_y is not None:
         starty += shift_y
-
+    print(starty)
+    print(startx)
     ptychogram = ptychogram[..., starty: starty + size, startx: startx + size]
+    # ptychogram = ptychogram[..., starty: starty + size, startx: startx + size]
+
 
     return ptychogram
 
@@ -959,16 +974,30 @@ class MyFRC:
         axes[0].set_axis_off()
         axes[1].imshow(complex2rgb(self.object2))
         axes[1].set_axis_off()
-        fig.show()
+        fig.canvas.draw()#(block=False)
 
     def normalize_amplitude(self):
         # normalized amplitude
-        self.object1 /= np.abs(self.object1).mean()
-        self.object2 /= np.abs(self.object2).mean()
+        # self.object1 /= np.sqrt(np.abs(self.object1)).mean()
+        # self.object2 /= np.sqrt(np.abs(self.object2)).mean()
+        # self.object1 /= np.mean(np.abs(self.object1))
+        # self.object2 /= np.mean(np.abs(self.object2))
+
+        # self.object1 /= np.amax(np.abs(self.object1))
+        # self.object2 /= np.amax(np.abs(self.object2))
+        # print(np.abs(self.object1).mean())
+        # print(np.abs(self.object2).mean())
+
         N = self.object1.shape[-1] // 2
         W = int(N * 0.4)
         self.object1 /= np.abs(self.object1[N-W//2:N+W//2,N-W//2:N+W//2]).mean()
         self.object2 /= np.abs(self.object2[N-W//2:N+W//2,N-W//2:N+W//2]).mean()
+
+    def normalize_amplitude2(self):
+        N = self.object1p.shape[-1] // 2
+        W = int(N * 0.4)
+        self.object1p /= np.abs(self.object1p[N-W//2:N+W//2,N-W//2:N+W//2]).mean()
+        self.object2p /= np.abs(self.object2p[N-W//2:N+W//2,N-W//2:N+W//2]).mean()
 
     def remove_global_phase_from_point(self, px=0, py=0):
         # same phase
@@ -1035,8 +1064,8 @@ class MyFRC:
         W = int(N * 1)
         region = np.zeros_like(self.object1p)
         region[N-W//2:N+W//2,N-W//2:N+W//2] = 1.0
-        object_2 = self.object1p * region
-        object_1 = self.object2p * region
+        object_2 = self.object1p #* region
+        object_1 = self.object2p #* region
 
         # align objects
         # check error metric before shift
@@ -1048,18 +1077,29 @@ class MyFRC:
         # check using phase
         shift_distance2 = register_translation(np.angle(object_1), np.angle(object_2), upsample_factor=100)[0]
         print("Shift distance phase: " + str(shift_distance2))
-        shift_distance = shift_distance1
+        shift_distance = -shift_distance1
+        shift_distance2 = -shift_distance2
+
         # shift_distance += np.array([0, .3])
         temp = shift(np.real(self.object2p), shift_distance, order=5) + 1j * shift(np.imag(self.object2p),
                                                                                     shift_distance,
                                                                                     order=5)
+        temp2 = shift(np.real(self.object2p), shift_distance2, order=5) + 1j * shift(np.imag(self.object2p),
+                                                                                   shift_distance2,
+                                                                                   order=5)
 
         # check error after shift
         error_as = error(self.object1p, temp)
+        error_ph = error(self.object1p, temp2)
         print(f'error before shift: {error_bs}\n'
-              f'error after shift: {error_as}')
-        if error_as < error_bs:
-            self.object2p = temp
+              f'error after shift (amp): {error_as}\n'
+              f'error after shift (phase): {error_ph}')
+        if error_as < error_bs or error_ph < error_bs:
+            if error_as < error_ph:
+                self.object2p = temp
+            else:
+                self.object2p = temp2
+
         # self.object2p = temp
 
     def show_centered_objects(self):
@@ -1071,7 +1111,11 @@ class MyFRC:
         axes[1].imshow(complex2rgb(self.object2p))
         axes[1].set_axis_off()
         axes[2].set_title('abs difference')
-        difference = np.abs(self.object1p)**2 - np.abs(self.object2p)**2 #/ np.abs(self.object2p)**2
+        # difference = np.abs(self.object1p)**2 - np.abs(self.object2p)**2 / np.amax(np.abs(self.object1p)**2)
+        difference = np.abs(self.object1p - self.object2p) ** 2 / np.amax(np.abs(self.object1p)**2)#- np.abs(self.object2p) ** 2  # / np.abs(self.object2p)**2
+        # difference = np.abs(self.object1p)**2 - np.abs(self.object2p)**2 / \
+        #              (np.abs(self.object1p)**2 + np.abs(self.object2p)**2)
+
         im=axes[2].imshow(difference, cmap='twilight')
         axes[2].set_axis_off()
         fig.colorbar(im, ax=axes[2], shrink=0.9)
@@ -1079,12 +1123,17 @@ class MyFRC:
         fig.show()
 
     def clip_filter_objects(self, filter_radius=None):
+        N = self.object1p.shape[-1] // 2
         if filter_radius is None:
             # clip/filter region
-            N = self.object1p.shape[-1] // 2
             filter_radius = int(N * 0.4)
-        self.object_1c = cropCenter(self.object1p, 2 * filter_radius)
-        self.object_2c = cropCenter(self.object2p, 2 * filter_radius)
+            self.object_1c = self.object1p
+            self.object_2c = self.object2p
+        else:
+            # self.object_1c = self.object1p*rect_px(self.object1p.shape[-1], filter_radius * 2)
+            # self.object_2c = self.object2p*rect_px(self.object1p.shape[-1], filter_radius * 2)
+            self.object_1c = cropCenter(self.object1p, 2 * filter_radius)
+            self.object_2c = cropCenter(self.object2p, 2 * filter_radius)
 
     def show_clipped_objects(self):
         fig, axes = plt.subplots(1, 2)
@@ -1138,6 +1187,9 @@ class MyFRC:
         ax.legend()
         fig.tight_layout()
         fig.show()
+
+    def get_FRC_plot_data(self):
+        return self.frc, self.half_bit_crit, self.dx
 
     def get_spatial_resolution(self):
         #half bit criteria
