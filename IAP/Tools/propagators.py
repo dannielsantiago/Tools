@@ -187,7 +187,10 @@ def propagate(u, method='fourier', dx=None, wavelength=None, dz=None, dq=None, b
         W = circ(Fx, Fy, 2 * f_max)
         # note: see the paper above if you are not sure what this bandlimit has to do here
         # note: accounts for circular symmetry of transfer function and imposes bandlimit to avoid sampling issues
-        H = np.exp(1.j * k * dz * np.sqrt(1 - (Fx * wavelength) ** 2 - (Fy * wavelength) ** 2)) * W
+        w_ = 1 - (Fx * wavelength) ** 2 - (Fy * wavelength) ** 2
+        w_[w_ >= 0] = np.sqrt(w_[w_ >= 0])
+        w_[w_ < 0] = 0
+        H = np.exp(1.j * k * dz * w_ * W)
         U = fft2c(u)
         u_new = ifft2c(U * H)
 
