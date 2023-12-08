@@ -9,6 +9,31 @@ import numpy as np
 from scipy.sparse.linalg import svds
 from scipy import linalg
 
+
+def zero_pad(arr):
+    '''
+    Pad arr with zeros to double the size. First dim is assumed to be batch dim which
+    won't be changed.
+    '''
+    out_arr = np.zeros((arr.shape[-2] * 2, arr.shape[-1] * 2), dtype=arr.dtype)
+
+    as1 = (arr.shape[-2] + 1) // 2
+    as2 = (arr.shape[-1] + 1) // 2
+    out_arr[as1:as1 + arr.shape[-2], as2:as2 + arr.shape[-1]] = arr
+    return out_arr
+
+
+def zero_unpad(arr, original_shape):
+    '''
+    Strip off padding of arr with zeros to halve the size. First dim is assumed to be batch dim which
+    won't be changed.
+    '''
+    as1 = (original_shape[-2] + 1) // 2
+    as2 = (original_shape[-1] + 1) // 2
+    return arr[as1:as1 + original_shape[-2], as2:as2 + original_shape[-1]]
+
+
+
 def circ(x, y, D):
     """
     generate a circle on a 2D grid
@@ -189,6 +214,7 @@ def propagate(u, method='fourier', dx=None, wavelength=None, dz=None, dq=None, b
         # note: accounts for circular symmetry of transfer function and imposes bandlimit to avoid sampling issues
         w_ = 1 - (Fx * wavelength) ** 2 - (Fy * wavelength) ** 2
         w_[w_ >= 0] = np.sqrt(w_[w_ >= 0])
+        # w_[w_ < 0] = 1j*np.sqrt(w_[w_ < 0]*(-1))
         w_[w_ < 0] = 0
         H = np.exp(1.j * k * dz * w_ * W)
         U = fft2c(u)
@@ -215,6 +241,92 @@ def propagate(u, method='fourier', dx=None, wavelength=None, dz=None, dq=None, b
 
         # Fresnel-Kirchhoff integral
         u_new = A * Q2 * fft2c(u * Q1)
+
+    elif method == 'sas':
+        """
+        Scalable angular spectrum propagation
+        :param u: a 2D square input field
+        :param z: propagation distance
+        :param wavelength: propagation wavelength
+        :param dx: grid spacing in original plane (u)
+        :return: propagated field and two quadratic phases
+        
+        for details see: 
+        Heintzmann, R., Loetgering, L., & Wechsler, F. (2023). 
+        Scalable angular spectrum propagation. Optica, 10(11), 1407. 
+        https://doi.org/10.1364/optica.497809
+        MIT License. Copyright (c) 2023 Felix Wechsler (info@felixwechsler.science), Rainer Heintzmann, Lars Lötgering
+        """
+
+        N = u.shape[-1]
+        L = N * dx
+        k = 2 * np.pi / wavelength
+
+        z_limit = (- 4 * L * np.sqrt(8 * L ** 2 / N ** 2 + wavelength ** 2) * np.sqrt(
+            L ** 2 * 1 / (8 * L ** 2 + N ** 2 * wavelength ** 2)) \
+                   / (wavelength * (-1 + 2 * np.sqrt(2) * np.sqrt(L ** 2 * 1 / (8 * L ** 2 + N ** 2 * wavelength ** 2)))))
+
+        assert dz <= z_limit
+
+        # don't change this pad_factor, only 2 is supported
+        pad_factor = 2
+        L_new = pad_factor * L
+        N_new = pad_factor * N
+        M = wavelength * dz * N / L ** 2 / 2
+        u_p = zero_pad(u)
+        # helper varaibles
+        df = 1 / L_new
+        Lf = N_new * df
+
+        # freq space coordinates for padded array
+        f_y = np.fft.fftshift(np.fft.fftfreq(N_new, 1 / Lf).reshape(1, 1, N_new).astype(np.float32))
+        f_x = f_y.reshape(1, N_new, 1)
+
+        # real space coordinates for padded array
+        # y = np.fft.ifftshift(np.linspace(-L_new / 2, L_new / 2, N_new, endpoint=False).reshape(1, 1, N_new), axes=(-1))
+        y = np.linspace(-L_new / 2, L_new / 2, N_new).reshape(1, 1, N_new)
+        x = y.reshape(1, N_new, 1)
+
+        # bandlimit helper
+        cx = wavelength * f_x
+        cy = wavelength * f_y
+        tx = L_new / 2 / dz + np.abs(wavelength * f_x)
+        ty = L_new / 2 / dz + np.abs(wavelength * f_y)
+
+        # bandlimit filter for precompensation, not smoothened!
+        W = (cx ** 2 * (1 + tx ** 2) / tx ** 2 + cy ** 2 <= 1) * (cy ** 2 * (1 + ty ** 2) / ty ** 2 + cx ** 2 <= 1)
+
+        # calculate kernels
+        w_as = 1 - np.abs(f_x * wavelength) ** 2 - np.abs(f_y * wavelength) ** 2
+        # w_as[w_as >= 0] = np.sqrt(w_[w_ >= 0])
+        # w_[w_as < 0] = 1j*np.sqrt(w_[w_ < 0]*(-1))
+        w_as[w_as < 0] = 0
+
+        H_AS = np.sqrt(w_as)
+        H_Fr = 1 - np.abs(f_x * wavelength) ** 2 / 2 - np.abs(f_y * wavelength) ** 2 / 2
+        delta_H = W * np.exp(1j * k * dz * (H_AS - H_Fr))
+
+        # apply precompensation
+        u_precomp = ifft2c(fft2c(u_p) * delta_H)
+        dq = wavelength * dz / L_new
+        Q = dq * N * pad_factor
+
+        # output coordinates
+        # q_y = np.fft.ifftshift(np.linspace(-Q / 2, Q / 2, N_new, endpoint=False).reshape(1, 1, N_new), axes=(-1))
+        q_y = np.linspace(-Q / 2, Q / 2, N_new).reshape(1, 1, N_new)
+        q_x = q_y.reshape(1, N_new, 1)
+
+        H_1 = np.exp(1j * k / (2 * dz) * (x ** 2 + y ** 2))
+
+        if True: #skip final phase term, in only intensity is to be considered of u_new
+            u_p_final = fft2c(H_1 * u_precomp)
+        else:
+            H_2 = np.exp(1j * k * dz) * np.exp(1j * k / (2 * z) * (q_x ** 2 + q_y ** 2))
+            u_p_final = H_2 * fft2c(H_1 * u_precomp)
+
+        u_p_final = np.squeeze(u_p_final)
+        u_new = zero_unpad(u_p_final, u.shape)  # Make sure zero_unpad is implemented for NumPy arrays
+        print(u_new.shape)
 
     elif method == 'scaledASP':
         """
