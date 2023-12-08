@@ -279,13 +279,13 @@ def propagate(u, method='fourier', dx=None, wavelength=None, dz=None, dq=None, b
         Lf = N_new * df
 
         # freq space coordinates for padded array
-        f_y = np.fft.fftshift(np.fft.fftfreq(N_new, 1 / Lf).reshape(1, 1, N_new).astype(np.float32))
-        f_x = f_y.reshape(1, N_new, 1)
+        f_y = np.fft.fftshift(np.fft.fftfreq(N_new, 1 / Lf).reshape(1, N_new).astype(np.float32))
+        f_x = f_y.reshape(N_new, 1)
 
         # real space coordinates for padded array
         # y = np.fft.ifftshift(np.linspace(-L_new / 2, L_new / 2, N_new, endpoint=False).reshape(1, 1, N_new), axes=(-1))
-        y = np.linspace(-L_new / 2, L_new / 2, N_new).reshape(1, 1, N_new)
-        x = y.reshape(1, N_new, 1)
+        y = np.linspace(-L_new / 2, L_new / 2, N_new, endpoint=False).reshape(1, N_new)
+        x = y.reshape(N_new, 1)
 
         # bandlimit helper
         cx = wavelength * f_x
@@ -313,8 +313,8 @@ def propagate(u, method='fourier', dx=None, wavelength=None, dz=None, dq=None, b
 
         # output coordinates
         # q_y = np.fft.ifftshift(np.linspace(-Q / 2, Q / 2, N_new, endpoint=False).reshape(1, 1, N_new), axes=(-1))
-        q_y = np.linspace(-Q / 2, Q / 2, N_new).reshape(1, 1, N_new)
-        q_x = q_y.reshape(1, N_new, 1)
+        q_y = np.linspace(-Q / 2, Q / 2, N_new, endpoint=False).reshape(1, N_new)
+        q_x = q_y.reshape(N_new, 1)
 
         H_1 = np.exp(1j * k / (2 * dz) * (x ** 2 + y ** 2))
 
@@ -324,8 +324,7 @@ def propagate(u, method='fourier', dx=None, wavelength=None, dz=None, dq=None, b
             H_2 = np.exp(1j * k * dz) * np.exp(1j * k / (2 * z) * (q_x ** 2 + q_y ** 2))
             u_p_final = H_2 * fft2c(H_1 * u_precomp)
 
-        u_p_final = np.squeeze(u_p_final)
-        u_new = zero_unpad(u_p_final, u.shape)  # Make sure zero_unpad is implemented for NumPy arrays
+        u_new = zero_unpad(u_p_final, u.shape)
         print(u_new.shape)
 
     elif method == 'scaledASP':
