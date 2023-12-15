@@ -145,8 +145,8 @@ def circ_px(N, D):
     :param D: diameter in px
     :return: a 2D array
     """
-    xp = np.linspace(-N//2, N//2, N)
-    x,y = np.meshgrid(xp, xp)
+    x = np.linspace(-N//2, N//2, N, endpoint=False).reshape(1,N)
+    y = x.reshape(N,1)
     circle = (x ** 2 + y ** 2) < (D / 2) ** 2
     return circle
 
@@ -157,10 +157,10 @@ def rect_px(N, D):
     :param D: lateral size of square in px
     :return: a 2D array
     """
-    xp = np.linspace(-N//2, N//2, N)
-    x,y = np.meshgrid(xp, xp)
-    arr = np.logical_and(abs(x) < (D / 2), abs(y) < (D / 2))
-    return arr
+    x = np.linspace(-N // 2, N // 2, N, endpoint=False).reshape(1, N)
+    y = x.reshape(N, 1)
+    square = (x**2 <= (D / 2)**2) * (y**2 <= (D / 2)**2)
+    return square
 
 
 def rect(arr, threshold = 0.5):
