@@ -399,7 +399,7 @@ def propagate(u, method='fourier', dx=None, wavelength=None, dz=None, dq=None, b
     return u_new
 
 
-def generate_ProbeModes(illu, wavelength, pinhole, Np, Xp, Yp, zs, nModes=None, verbose=True):
+def generate_ProbeModes(illu, wavelength, pinhole, Np, Xp, Yp, zs, nModes=None, verbose=True, Xs=None, Ys=None):
     """
     simulate partially coherent illumination:
     simulate (mutually uncorrelated) spherical wavelets
@@ -414,18 +414,21 @@ def generate_ProbeModes(illu, wavelength, pinhole, Np, Xp, Yp, zs, nModes=None, 
     :param zs: distance of source to pinhole
     :return: probeModes, sphericalWavelets in pupil
     """
+    if Xs is None and Ys is None:
+        Xs, Ys = Xp, Yp
+
     # source coordinates
     sources = np.array(np.where(illu > 0))
     # number of source points
     nsp = len(sources[0, :])
     # (mutually uncorrelated) spherical wavelets
-    sphericalWavelets = np.zeros((nsp, Np, Np), dtype=np.complex)
+    sphericalWavelets = np.zeros((nsp, Np, Np), dtype=complex)
 
     # get orthogonal modes by orthogonalizing spherical waves
     for i in range(nsp):
         # evaluate Greens function (Rayleigh-Sommerfeld) for each point source
-        R = np.sqrt(np.square(Xp - Xp[sources[:, i][-2], sources[:, i][-1]]) +
-                    np.square(Yp - Yp[sources[:, i][-2], sources[:, i][-1]]) + zs ** 2)
+        R = np.sqrt(np.square(Xp - Xs[sources[:, i][-2], sources[:, i][-1]]) +
+                    np.square(Yp - Ys[sources[:, i][-2], sources[:, i][-1]]) + zs ** 2)
         phaase = np.exp((1j * 2 * np.pi / wavelength) * R)
         phase = (phaase * zs) / (np.dot(R, R))
         sphericalWavelets[i, :, :] = illu[sources[:, i][-2], sources[:, i][-1]] * phase
@@ -442,7 +445,8 @@ def generate_ProbeModes(illu, wavelength, pinhole, Np, Xp, Yp, zs, nModes=None, 
     energy = np.sum(100 * normalizedEigenvalues[0:effModes])
 
     if nModes is None:
-        nModes = 9
+        # nModes = 9
+        nModes = effModes
     probeModes = probe[0:nModes, :, :]
 
     if verbose:
