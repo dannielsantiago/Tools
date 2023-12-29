@@ -427,11 +427,29 @@ def generate_ProbeModes(illu, wavelength, pinhole, Np, Xp, Yp, zs, nModes=None, 
     # get orthogonal modes by orthogonalizing spherical waves
     for i in range(nsp):
         # evaluate Greens function (Rayleigh-Sommerfeld) for each point source
-        R = np.sqrt(np.square(Xp - Xs[sources[:, i][-2], sources[:, i][-1]]) +
-                    np.square(Yp - Ys[sources[:, i][-2], sources[:, i][-1]]) + zs ** 2)
-        phaase = np.exp((1j * 2 * np.pi / wavelength) * R)
-        phase = (phaase * zs) / (np.dot(R, R))
-        sphericalWavelets[i, :, :] = illu[sources[:, i][-2], sources[:, i][-1]] * phase
+        # R = np.sqrt(np.square(Xp - Xs[sources[:, i][-2], sources[:, i][-1]]) +
+        #             np.square(Yp - Ys[sources[:, i][-2], sources[:, i][-1]]) + zs ** 2)
+        # phaase = np.exp((1j * 2 * np.pi / wavelength) * R)
+        # phase = (phaase * zs) / (np.dot(R, R))
+        # Extract the source indices
+        x_index = sources[:, i][-1]
+        y_index = sources[:, i][-2]
+
+        # Calculate the squared distances
+        dx_squared = np.square(Xp - Xs[y_index, x_index])
+        dy_squared = np.square(Yp - Ys[y_index, x_index])
+        dz_squared = zs ** 2
+
+        # Sum the squared distances
+        R_squared = dx_squared + dy_squared + dz_squared
+
+        # Compute R (distance)
+        R = np.sqrt(R_squared)
+
+        # evaluate Greens function (Rayleigh-Sommerfeld) for each point source
+        greens = np.exp((1j * 2 * np.pi / wavelength) * R) * zs / R_squared
+
+        sphericalWavelets[i, :, :] = illu[y_index, x_index] * greens
         # multiply each spherical wave with pinhole in entrance pupil
         sphericalWavelets[i, :, :] *= pinhole
 
