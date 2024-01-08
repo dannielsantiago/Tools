@@ -206,17 +206,18 @@ def propagate(u, method='fourier', dx=None, wavelength=None, dz=None, dq=None, b
         # source coordinates, this assumes that the field is NxN pixels
         N = u.shape[-1]
         L = N * dx
-        X = np.arange(-N / 2, N / 2) / L
-        Fx, Fy = np.meshgrid(X, X)
-        f_max = L / (wavelength * np.sqrt(L ** 2 + 4 * dz ** 2))
+        linspacex = np.linspace(-N / 2, N / 2, N, endpoint=False).reshape(1, N)
+        Fx = linspacex / L
+        Fy = Fx.reshape(N, 1)
+
+        f_max = 1 / (wavelength * np.sqrt(1 + (2 * dz / L) ** 2))
         W = circ(Fx, Fy, 2 * f_max)
-        # note: see the paper above if you are not sure what this bandlimit has to do here
-        # note: accounts for circular symmetry of transfer function and imposes bandlimit to avoid sampling issues
-        w_ = 1 - (Fx * wavelength) ** 2 - (Fy * wavelength) ** 2
-        w_[w_ >= 0] = np.sqrt(w_[w_ >= 0])
-        # w_[w_ < 0] = 1j*np.sqrt(w_[w_ < 0]*(-1))
-        w_[w_ < 0] = 0
-        H = np.exp(1.j * k * dz * w_ * W)
+        # w accounts for circular symmetry of transfer function and imposes bandlimit to avoid sampling issues
+        w = 1 / wavelength ** 2 - Fx ** 2 - Fy ** 2
+        w[w >= 0] = np.sqrt(w[w >= 0])
+        w[w < 0] = 0
+        H = np.exp(1.j * 2 * np.pi * dz * w) * W
+
         U = fft2c(u)
         u_new = ifft2c(U * H)
 
@@ -225,13 +226,15 @@ def propagate(u, method='fourier', dx=None, wavelength=None, dz=None, dq=None, b
         # source coordinates, this assumes that the field is NxN pixels
         N = u.shape[-1]
         L = N * dx
-        x = np.arange(-N // 2, N // 2) * dx
-        [Y, X] = np.meshgrid(x, x)
+
+        linspacex = np.linspace(-N / 2, N / 2, N, endpoint=False).reshape(1, N)
+        X = linspacex * dx
+        Y = X.reshape(N, 1)
 
         # target coordinates
         dq = wavelength * dz / L
-        q = np.arange(-N // 2, N // 2) * dq
-        [Qy, Qx] = np.meshgrid(q, q)
+        Qx = linspacex * dq
+        Qy = Qx.reshape(N, 1)
 
         Q1 = np.exp(1j * k / (2 * dz) * (X ** 2 + Y ** 2))
         Q2 = np.exp(1j * k / (2 * dz) * (Qx ** 2 + Qy ** 2))
@@ -275,17 +278,18 @@ def propagate(u, method='fourier', dx=None, wavelength=None, dz=None, dq=None, b
         M = wavelength * dz * N / L ** 2 / 2
         u_p = zero_pad(u)
         # helper varaibles
-        df = 1 / L_new
-        Lf = N_new * df
+        # df = 1 / L_new
+        # Lf = N_new * df
 
         # freq space coordinates for padded array
-        f_y = np.fft.fftshift(np.fft.fftfreq(N_new, 1 / Lf).reshape(1, N_new).astype(np.float32))
+        # f_y = np.fft.fftshift(np.fft.fftfreq(N_new, 1 / Lf).reshape(1, N_new).astype(np.float32))
+        f_y = np.fft.fftshift(np.fft.fftfreq(N_new, dx).reshape(1, N_new).astype(np.float32))
         f_x = f_y.reshape(N_new, 1)
 
         # real space coordinates for padded array
         # y = np.fft.ifftshift(np.linspace(-L_new / 2, L_new / 2, N_new, endpoint=False).reshape(1, 1, N_new), axes=(-1))
-        y = np.linspace(-L_new / 2, L_new / 2, N_new, endpoint=False).reshape(1, N_new)
-        x = y.reshape(N_new, 1)
+        x = np.linspace(-L_new / 2, L_new / 2, N_new, endpoint=False).reshape(1, N_new)
+        y = x.reshape(N_new, 1)
 
         # bandlimit helper
         cx = wavelength * f_x
@@ -313,8 +317,8 @@ def propagate(u, method='fourier', dx=None, wavelength=None, dz=None, dq=None, b
 
         # output coordinates
         # q_y = np.fft.ifftshift(np.linspace(-Q / 2, Q / 2, N_new, endpoint=False).reshape(1, 1, N_new), axes=(-1))
-        q_y = np.linspace(-Q / 2, Q / 2, N_new, endpoint=False).reshape(1, N_new)
-        q_x = q_y.reshape(N_new, 1)
+        q_x = np.linspace(-Q / 2, Q / 2, N_new, endpoint=False).reshape(1, N_new)
+        q_y = q_x.reshape(N_new, 1)
 
         H_1 = np.exp(1j * k / (2 * dz) * (x ** 2 + y ** 2))
 
@@ -345,53 +349,46 @@ def propagate(u, method='fourier', dx=None, wavelength=None, dz=None, dq=None, b
         # assume square grid
         N = u.shape[-1]
         L = N * dx
-        f_max = L / (wavelength * np.sqrt(L ** 2 + 4 * dz ** 2))
 
         # source plane coordinates
-        x1 = np.arange(-N // 2, N // 2) * dx
-        X1, Y1 = np.meshgrid(x1, x1)
-        r1sq = X1 ** 2 + Y1 ** 2
-        # spatial frequencies(of source plane)
-        f = np.arange(-N // 2, N // 2) / (N * dx)
-        FX, FY = np.meshgrid(f, f)
+        linspacex = np.linspace(-N / 2, N / 2, N, endpoint=False).reshape(1, N)
+        X = linspacex * dx
+        Y = X.reshape(N, 1)
 
-        W = circ(FX, FY, 2 * f_max)
-        fsq = FX ** 2 + FY ** 2
+        r1sq = X ** 2 + Y ** 2
+        # spatial frequencies(of source plane)
+        Fx = linspacex / L
+        Fy = Fx.reshape(N, 1)
+
+        fsq = Fx ** 2 + Fy ** 2
         # scaling parameter
-        # dq = wavelength * dz / L
         m = dq / dx
 
         # quadratic phase factors
         Q1 = np.exp(1.j * (k / 2) * ((1 - m) / dz) * r1sq)
-        Q2 = np.exp(1.j * (np.pi ** 2) * (2 * (-dz) / (m * k) ) * fsq) #* W
-        # Q1 = np.exp(1.j * k / 2 * (1 - m) / dz * r1sq)
-        # Q2 = np.exp(-1.j * np.pi ** 2 * 2 * dz / m / k * fsq)
+        Q2 = np.exp(1.j * (np.pi ** 2) * (2 * (-dz) / (m * k)) * fsq)
 
         if bandlimit:
             if m is not 1:
                 r1sq_max = wavelength * dz / (2 * dx * (1 - m))
-                Wr = np.array(circ(X1, Y1, 2 * r1sq_max))
+                Wr = np.array(circ(X, Y, 2 * r1sq_max))
                 Q1 = Q1 * Wr
 
             fsq_max = m / (2 * dz * wavelength * (1 / (N * dx)))
-            Wf = np.array(circ(FX, FY, 2 * fsq_max))
+            Wf = np.array(circ(Fx, Fy, 2 * fsq_max))
             Q2 = Q2 * Wf
-
 
         # note: to be analytically correct, add Q3 (see below)
         # if only intensities matter, leave it out
-        x2 = np.arange(-N / 2, N / 2) * dq
-        X2, Y2 = np.meshgrid(x2, x2)
+        X2 = linspacex * dq
+        Y2 = X2.reshape(N, 1)
         r2sq = X2 ** 2 + Y2 ** 2
         Q3 = np.exp(1.j * k / 2 * (m - 1) / (m * dz) * r2sq)
+
         # compute the propagated field
-
-        # # compute the propagated field
-        # Uout = np.conj(Q1) * ifft2c(np.conj(Q2) * fft2c(u*np.conj(Q3)))
-
         if dz > 0:
-            u_new = ifft2c(Q2 * fft2c(Q1 * u))
-            # u_new = Q3 * ifft2c(Q2 * fft2c(Q1 * u))
+            # u_new = ifft2c(Q2 * fft2c(Q1 * u))
+            u_new = Q3 * ifft2c(Q2 * fft2c(Q1 * u))
         else:
             # u_new = np.conj(Q1) * ifft2c(np.conj(Q2) * fft2c(u))
             u_new = np.conj(Q1) * ifft2c(np.conj(Q2) * fft2c(u * np.conj(Q3)))
@@ -479,17 +476,17 @@ def generate_ProbeModes(illu, wavelength, pinhole, Np, Xp, Yp, zs, nModes=None, 
     return sphericalWavelets, probeModes, normalizedEigenvalues, purity
 
 
-def createProbe(Np, dxp, wavelength, diameter, phaseFactor=20):
+def createProbe(Np, dxp, wavelength, diameter, f=None):
     Lp = Np * dxp
     xp = np.arange(-Np / 2, Np / 2) * dxp
     Yp, Xp = np.meshgrid(xp, xp)
-    pinhole = nip.rr((Np, Np)) < (diameter / (2 * dxp))
+    # pinhole = nip.rr((Np, Np)) < (diameter / (2 * dxp))
     # blur the edges by convolving with a small kernel i.e 5
-    pinhole = nip.convolve(pinhole, nip.rr(pinhole.shape) < 5)
-    phase1 = np.exp(1j * phaseFactor * np.pi / wavelength * (np.square(Xp) + np.square(Yp)))
-    # self.probe = nip.ift2d(self.pinhole*phase1)
-    probe = pinhole * phase1
-    return probe, Yp, Xp, Lp
+    if f is not None:
+        probe = pinhole * np.exp(1j * 2 * np.pi / wavelength * (Xp**2 + Yp**2) / 2 / f)
+        return probe
+    else:
+        return probe
 
 def u_limit(L,dz,w, x0=0, sign='+'):
     if sign == '+':
