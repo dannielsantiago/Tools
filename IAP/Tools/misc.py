@@ -206,7 +206,7 @@ def complex2rgb(u, amplitudeScalingFactor=1, scalling=1):
     """
     # hue (normalize angle)
     # if u is on the GPU, remove it as we can toss it now.
-    h = np.angle(u)
+    h = np.angle(u).astype(float)
     h = (h + np.pi) / (2 * np.pi)
     # saturation  (ones)
     s = np.ones_like(h)
