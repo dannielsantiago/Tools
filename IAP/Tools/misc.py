@@ -643,7 +643,7 @@ def wavelength_to_rgb(wavelength, gamma=0.8, opacity=200):
     return (int(R), int(G), int(B), opacity)
 
 
-def spiral_blade_mask(wavelength=13.5e-9, f=0.6e-3, N=256, dx=10e-9, n_blades=3, blades_diameter=8e-6):
+def spiral_blade_mask(wavelength=13.5e-9, f=0.6e-3, N=256, dx=10e-9, n_blades=3, blades_diameter=8e-6, angle=None):
     """
     :param wavelength: target wavelength
     :param f: focus distance, the smaller --> more twisting of the blades around the center
@@ -653,16 +653,32 @@ def spiral_blade_mask(wavelength=13.5e-9, f=0.6e-3, N=256, dx=10e-9, n_blades=3,
     :param blades_diameter: extension of the blades
     :return: binary array NxN where 0 represents the blade structures
     """
-    # die Standartwerte ergeben die Spirale wie sie in der Vorlage erscheint
+    if angle is not None:
+        stretching_factor = 1 / np.cos(np.deg2rad(angle))
+    else:
+        stretching_factor = 1
+
     x = np.arange(-N / 2, N / 2) * dx
     y = np.copy(x)
     x_grid, y_grid = np.meshgrid(x, y)
+    # x_grid /= stretching_factor
+    # y_grid *= stretching_factor
     r = (x_grid ** 2 + y_grid ** 2) ** (1 / 2)
+    # r = (x_grid ** 2 + (y_grid*stretching_factor) ** 2) ** (1 / 2)
+    # r = ((x_grid/stretching_factor) ** 2 + (y_grid) ** 2) ** (1 / 2)
+
+
     phi = np.arctan2(y_grid, x_grid)
+    # phi = np.arctan2(y_grid*stretching_factor, x_grid)
+    # phi = np.arctan2(y_grid, x_grid/stretching_factor)
+
     # n_blades = n_blades % 5 + 2  #  minimum amount of blades = 2, increases to 6 anc cycles back
     data = np.exp(-1j * np.pi * r ** 2 / f / wavelength) * np.exp(1j * n_blades * phi)
+
     binary = np.real(data) < 0
     circ = x_grid ** 2 + y_grid ** 2 < (blades_diameter / 2) ** 2
+    # circ = (x_grid/np.sqrt(2)) ** 2 + y_grid ** 2 < (blades_diameter / 2) ** 2
+
     binary = circ * binary
     binary = (~binary).astype(int)
 

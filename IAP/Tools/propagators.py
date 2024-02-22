@@ -410,14 +410,12 @@ def propagate(u, method='fourier', dx=None, wavelength=None, dz=None, dq=None, b
         linspace = np.linspace(-N / 2, N / 2, N, endpoint=False).reshape(1, N)
         Fx = linspace / L
         Fy = Fx.reshape(N,1)
-        
-        omega = np.sqrt(1 - (Fx * wavelength) ** 2 - (Fy * wavelength) ** 2)
-        f_max = L / (wavelength * np.sqrt(L ** 2 + 4 * z ** 2))
+
+        f_max = 1 / wavelength
         W = np.logical_and((abs(Fx / f_max) < 1), (abs(Fy / f_max) < 1))
-        H = np.exp(1j * k * z * np.sqrt(1 - (Fx * wavelength) ** 2 - (Fy * wavelength) ** 2))
 
         # propagate and create rotated coordinates for reference plane
-        Ud = fft2c(u) * H
+        Ud = fft2c(u)
         # FxRot = np.cos(rad) * Fx + np.sin(rad) * omega
         # FxRot = (1 / wavelength) * (np.cos(rad) * wavelength * Fx + np.sin(rad) * omega)
         # FxRot -= np.sin(rad) / wavelength  # frequency shift for u_0? Check paper again
@@ -427,7 +425,7 @@ def propagate(u, method='fourier', dx=None, wavelength=None, dz=None, dq=None, b
         # method 1 (fastest)
         # inverting the scaling seem to do the correct stretching on the beam
         # normal scaling for propagation towards detector, elliptic beam becomes circle
-        fxRot = (1 / wavelength) * ((fx * np.cos(rad)) * wavelength + np.sin(rad)) # Fx instead?
+        fxRot = (1 / wavelength) * ((Fx * np.cos(rad)) * wavelength + np.sin(rad)) # Fx instead?
         fxRot -= np.sin(rad) / wavelength  # frequency shift for u_0? Check paper again
         URot = np.empty_like(Ud)
 
