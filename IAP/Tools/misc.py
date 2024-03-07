@@ -661,7 +661,7 @@ def spiral_blade_mask(wavelength=13.5e-9, f=0.6e-3, N=256, dx=10e-9, n_blades=3,
     x = np.arange(-N / 2, N / 2) * dx
     y = np.copy(x)
     x_grid, y_grid = np.meshgrid(x, y)
-    # x_grid /= stretching_factor
+    x_grid /= stretching_factor
     # y_grid *= stretching_factor
     r = (x_grid ** 2 + y_grid ** 2) ** (1 / 2)
     # r = (x_grid ** 2 + (y_grid*stretching_factor) ** 2) ** (1 / 2)
