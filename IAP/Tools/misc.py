@@ -12,6 +12,30 @@ from skimage.registration import phase_cross_correlation as register_translation
 from scipy.ndimage import shift, gaussian_filter, center_of_mass
 from numpy.fft import fft2, fftshift
 import scipy.ndimage as ndi
+from matplotlib.colors import LinearSegmentedColormap
+
+def setCustomColorMap():
+    """
+    create the colormap for diffraction data (the same as matlab)
+    return: customized matplotlib colormap
+    """
+    colors = [
+        (0.0, 0.0, 0.2),
+        (0, 0.0875, 1),
+        (0, 0.4928, 1),
+        (0, 1, 0),
+        (1, 0.6614, 0),
+        (1, 0.4384, 0),
+        (0.8361, 0, 0),
+        (0.6505, 0, 0),
+        (0.4882, 0, 0),
+    ]
+
+    n = 255  # Discretizes the interpolation into n bins
+    cm = LinearSegmentedColormap.from_list("cmap", colors, n)
+    return cm
+
+CMAP_DIFFRACTION = setCustomColorMap()
 
 plt.rcParams['text.usetex'] = True
 # plt.rcParams['font.size'] = 15
