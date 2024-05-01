@@ -67,6 +67,17 @@ def fft2c(array):
     return np.fft.fftshift(np.fft.fft2(np.fft.ifftshift(array), norm='ortho'))
 
 
+def binning_1d(arr, binFactor):
+    # Calculate the length of the new array after binning
+    new_length = arr.shape[0] // binFactor
+
+    # Reshape the array to a 2D array where each row has binFactor elements
+    reshaped_array = arr[:new_length * binFactor].reshape((new_length, binFactor))
+
+    # Sum along the rows to bin the data
+    binned_array = reshaped_array.sum(axis=1)
+
+    return binned_array
 
 def binning(arr, binFactor):
     shape = (arr.shape[0] // binFactor, binFactor,
