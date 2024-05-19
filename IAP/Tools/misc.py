@@ -37,12 +37,12 @@ def setCustomColorMap():
 
 CMAP_DIFFRACTION = setCustomColorMap()
 
-plt.rcParams['text.usetex'] = True
-# plt.rcParams['font.size'] = 15
-# plt.rcParams['legend.fontsize'] = 18
-plt.rcParams['xtick.direction'] = 'in'
-plt.rcParams['ytick.direction'] = 'in'
-plt.rcParams['font.family'] = 'serif'
+# plt.rcParams['text.usetex'] = True
+# # plt.rcParams['font.size'] = 15
+# # plt.rcParams['legend.fontsize'] = 18
+# plt.rcParams['xtick.direction'] = 'in'
+# plt.rcParams['ytick.direction'] = 'in'
+# plt.rcParams['font.family'] = 'serif'
 
 
 def ifft2c(array):

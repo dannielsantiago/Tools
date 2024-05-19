@@ -8,7 +8,7 @@ Created on Thu Apr 23 22:20:38 2020
 import numpy as np
 from scipy.sparse.linalg import svds
 from scipy import linalg
-
+from math import pi
 
 def zero_pad(arr):
     '''
@@ -604,6 +604,227 @@ def propagate(u, method='fourier', dx=None, wavelength=None, dz=None, dq=None, b
         u_new = ifft2c(URot * W)
 
     return u_new
+
+def rotate_around_y(Xin, Yin, Ein, waveLen, phi, Xout, Yout, linx_in=0, liny_in=0):
+    # Copy field
+    Ex = Ein
+
+    # original sampling points and field
+    old_ny, old_nx = Ex.shape
+
+    # zero padding
+    Ex = np.pad(Ex, ((int(old_ny/2), int(old_nx/2)), (int(old_ny/2), int(old_nx/2))), 'constant', constant_values=(0, 0))
+
+    # new sampling points
+    ny, nx = Ex.shape
+
+    # extended spatial coordinates and spatial frequencies
+    dx1 = Xin[0, 1] - Xin[0, 0]
+    dy1 = Yin[1, 0] - Yin[0, 0]
+    x1 = np.fft.fftshift(np.fft.fftfreq(nx, 1)) * nx * dx1
+    y1 = np.fft.fftshift(np.fft.fftfreq(ny, 1)) * ny * dy1
+    X, Y = np.meshgrid(x1, y1)
+    Z = 0 * X
+
+    # extended spatial frequencies
+    dx1 = Xin[0, 1] - Xin[0, 0]
+    dy1 = Yin[1, 0] - Yin[0, 0]
+    sx1 = np.fft.fftshift(np.fft.fftfreq(nx, dx1))
+    sy1 = np.fft.fftshift(np.fft.fftfreq(ny, dy1))
+    Sx, Sy = np.meshgrid(sx1, sy1)
+
+    # calculation of the spectrum
+    Gxm = np.fft.fftshift(np.fft.fft2(np.fft.ifftshift(Ex)))
+    Kx = Sx * 2 * pi
+    Ky = Sy * 2 * pi
+
+    # coupled coordinates z' = z(y)
+    z2y = Yout[:, 1] * np.tan(phi) * np.cos(phi)
+
+    # scaled coordinates in Y'
+    Ys = Yout * np.cos(phi)
+
+    # output sampling points
+    my, mx = np.shape(Xout)
+
+    # analytical phase
+    Sx = Sx + linx_in
+    Sy = Sy + liny_in
+
+    # parameters for the chirp-z
+    dx2 = np.abs(Xout[0, 1] - Xout[0, 0])
+    rxb = (dx1 / dx2) * (nx / mx)
+    if rxb < 1:
+        raise Exception('Zoom out is not possible. Please change the output sampling grid.')
+
+    sx = np.fft.fftshift(np.fft.fftfreq(nx,dx1))
+    dkxb = (sx[1] - sx[0])*2*pi
+    dxb = 2*pi/(dkxb*nx)
+    kxminb = -np.ceil((mx-1)/2)*dxb/rxb
+    kxmaxb = np.floor((mx-1)/2)*dxb/rxb
+    kxMaxb = mx*dxb
+    Ax = np.exp(-1j*pi*(2*kxminb/kxMaxb + 0*dxb/kxMaxb))
+    Wx = np.exp(1j*2*pi*(kxmaxb + dxb/rxb - kxminb)/((kxMaxb)*(mx)))
+
+    # calculation for Ex
+    Gx2 = np.zeros((my, nx), dtype=complex)
+    Mx = Gxm*np.exp(2*np.pi*1j*(Ys[0,0]*Sy + z2y[0]*np.sqrt(1/(waveLen)**2 - Sx**2 - Sy**2)))
+    dMx = np.exp(2*np.pi*1j*((Ys[1,0] - Ys[0,0])*Sy + (z2y[1] - z2y[0])*np.sqrt(1/(waveLen)**2 - Sx**2 - Sy**2)))
+    Gx2[0,:] = np.sum(Mx, axis=0)/ny
+    for jy in range(my-1):
+        Mx = Mx*dMx
+        Gx2[jy+1,:] = np.sum(Mx, axis=0)/ny 
+
+    dim2 = 2
+    Ex =  chirpz2Daxis(Gx2, Ax, Wx, mx, dim2)/nx
+
+    # analytical linear phase,
+    liny_out = liny_in - np.cos(phi) * np.tan(phi)
+    linx_out = linx_in
+
+    # substract the linear phase
+    Eout = Ex * np.exp(-1j * 2 * pi * Ys * np.tan(phi) / waveLen)
+
+    return Eout, Xout, Yout, linx_out, liny_out
+
+def rotate_around_x(Xin, Yin, Ein, waveLen, phi, Xout, Yout, linx_in=0, liny_in=0):
+    # Copy field
+    Ex = Ein
+
+    # original sampling points and field
+    old_ny, old_nx = Ex.shape
+
+    # zero padding
+    Ex = np.pad(Ex, ((int(old_ny/2), int(old_nx/2)), (int(old_ny/2), int(old_nx/2))), 'constant', constant_values=(0, 0))
+
+    # new sampling points
+    ny, nx = Ex.shape
+
+    # extended spatial coordinates and spatial frequencies
+    dx1 = Xin[0, 1] - Xin[0, 0]
+    dy1 = Yin[1, 0] - Yin[0, 0]
+    x1 = np.fft.fftshift(np.fft.fftfreq(nx, 1)) * nx * dx1
+    y1 = np.fft.fftshift(np.fft.fftfreq(ny, 1)) * ny * dy1
+    X, Y = np.meshgrid(x1, y1)
+    Z = 0 * X
+
+    # extended spatial frequencies
+    dx1 = Xin[0, 1] - Xin[0, 0]
+    dy1 = Yin[1, 0] - Yin[0, 0]
+    sx1 = np.fft.fftshift(np.fft.fftfreq(nx, dx1))
+    sy1 = np.fft.fftshift(np.fft.fftfreq(ny, dy1))
+    Sx, Sy = np.meshgrid(sx1, sy1)
+
+    # calculation of the spectrum
+    Gxm = np.fft.fftshift(np.fft.fft2(np.fft.ifftshift(Ex)))
+    Kx = Sx * 2 * pi
+    Ky = Sy * 2 * pi
+
+    # coupled coordinates z' = z(y)
+    z2y = Yout[:, 1] * np.tan(phi) * np.cos(phi)
+
+    # scaled coordinates in Y'
+    Ys = Yout * np.cos(phi)
+
+    # output sampling points
+    my, mx = np.shape(Xout)
+
+    # analytical phase
+    Sx = Sx + linx_in
+    Sy = Sy + liny_in
+
+    # parameters for the chirp-z
+    dx2 = np.abs(Xout[0, 1] - Xout[0, 0])
+    rxb = (dx1 / dx2) * (nx / mx)
+    if rxb < 1:
+        raise Exception('Zoom out is not possible. Please change the output sampling grid.')
+
+    sx = np.fft.fftshift(np.fft.fftfreq(nx,dx1))
+    dkxb = (sx[1] - sx[0])*2*pi
+    dxb = 2*pi/(dkxb*nx)
+    kxminb = -np.ceil((mx-1)/2)*dxb/rxb
+    kxmaxb = np.floor((mx-1)/2)*dxb/rxb
+    kxMaxb = mx*dxb
+    Ax = np.exp(-1j*pi*(2*kxminb/kxMaxb + 0*dxb/kxMaxb))
+    Wx = np.exp(1j*2*pi*(kxmaxb + dxb/rxb - kxminb)/((kxMaxb)*(mx)))
+
+    # calculation for Ex
+    Gx2 = np.zeros((my, nx), dtype=complex)
+    Mx = Gxm*np.exp(2*np.pi*1j*(Ys[0,0]*Sy + z2y[0]*np.sqrt(1/(waveLen)**2 - Sx**2 - Sy**2)))
+    dMx = np.exp(2*np.pi*1j*((Ys[1,0] - Ys[0,0])*Sy + (z2y[1] - z2y[0])*np.sqrt(1/(waveLen)**2 - Sx**2 - Sy**2)))
+    Gx2[0,:] = np.sum(Mx, axis=0)/ny
+    for jy in range(my-1):
+        Mx = Mx*dMx
+        Gx2[jy+1,:] = np.sum(Mx, axis=0)/ny 
+
+    dim2 =2
+    Ex =  chirpz2Daxis(Gx2, Ax, Wx, mx, dim2)/nx
+
+    # analytical linear phase,
+    liny_out = liny_in - np.cos(phi) * np.tan(phi)
+    linx_out = linx_in
+
+    # substract the linear phase
+    Eout = Ex * np.exp(-1j * 2 * pi * Ys * np.tan(phi) / waveLen)
+
+    return Eout, Xout, Yout, linx_out, liny_out
+
+def chirpz2Daxis(U1, A, W, M, dim=1):
+    """
+    Returns the chirp-z transform of an array along the given axis for specified parameters.
+    """
+
+    if dim == 1:
+        N = U1.shape[0]
+        My = M
+        Mx = U1.shape[1]
+        Lx = 2 ** int(np.ceil(np.log2(N + M - 1)))
+        Ly = 2 ** int(np.ceil(np.log2(N + M - 1)))
+        L = Ly
+
+    elif dim == 2:
+        N = U1.shape[1]
+        Mx = M
+        My = U1.shape[0]
+        Lx = 2 ** int(np.ceil(np.log2(N + M - 1)))
+        Ly = N
+        L = Lx
+
+    nn = np.linspace(0, N - 1, N)
+    mn = np.linspace(0, M - 1, M)
+    ln = np.linspace(L - N + 1, L - 1, N - 1)
+    be = np.linspace(M, L - N, L - N - M + 1)
+
+    W1 = W ** (((nn) ** 2) / 2)
+    W2 = W ** (-((mn) ** 2) / 2)
+    W3 = W ** (-((L - ln) ** 2) / 2)
+    W4 = 0 * be
+
+    A1 = A ** (-nn)
+    V = np.fft.fft(np.concatenate((W2, W4, W3), axis=0), axis=0)
+    Am = A1 * W1
+    Vm = V
+
+    # select correct axis
+    if dim == 1:
+        Am = np.transpose(Am)
+        Vm = np.transpose(Vm)
+    else:
+        Am = Am
+        Vm = Vm
+
+    # linear convolution
+    Y = np.fft.fft(np.pad(U1 * Am, ((0, Ly - U1.shape[0]), (0, Lx - U1.shape[1]))), axis=dim - 1)
+    U2g = np.fft.ifft(Y * Vm, axis=dim - 1)
+
+    # phase factor for centering
+    fak = (W2 ** -1) * ((A ** -1) * (W ** (np.linspace(0, M - 1, M))) ** (-1 * (int(np.floor(N / 2)))))
+
+    # output field
+    U2g_extr = U2g[:My, :Mx]
+    U2 = U2g_extr * fak
+
+    return U2
 
 
 def generate_ProbeModes(illu, wavelength, pinhole, Np, Xp, Yp, zs, nModes=None, verbose=True, Xs=None, Ys=None):
