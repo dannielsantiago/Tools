@@ -124,26 +124,34 @@ def generateFermatGrid(n, radius, minStep):
 
     return scanPos
 
-def zero_pad(arr):
-    '''
-    Pad arr with zeros to double the size. First dim is assumed to be batch dim which
-    won't be changed.
-    '''
-    out_arr = np.zeros((arr.shape[-2] * 2, arr.shape[-1] * 2), dtype=arr.dtype)
 
+def zero_pad(arr):
+    """
+    Pad arr with zeros to double the size. Only the last 2 dimensions are affected.
+    """
+    # Determine the new shape with doubled size in the last two dimensions
+    new_shape = arr.shape[:-2] + (arr.shape[-2] * 2, arr.shape[-1] * 2)
+    out_arr = np.zeros(new_shape, dtype=arr.dtype)
+
+    # Compute the starting indices for the original array within the padded array
     as1 = (arr.shape[-2] + 1) // 2
     as2 = (arr.shape[-1] + 1) // 2
-    out_arr[as1:as1 + arr.shape[-2], as2:as2 + arr.shape[-1]] = arr
+
+    # Place the original array in the center of the new zero-padded array
+    out_arr[..., as1:as1 + arr.shape[-2], as2:as2 + arr.shape[-1]] = arr
     return out_arr
 
+
 def zero_unpad(arr, original_shape):
-    '''
-    Strip off padding of arr with zeros to halve the size. First dim is assumed to be batch dim which
-    won't be changed.
-    '''
+    """
+    Strip off padding of arr with zeros to halve the size. Only the last 2 dimensions are affected.
+    """
+    # Compute the starting indices for the subarray to extract
     as1 = (original_shape[-2] + 1) // 2
     as2 = (original_shape[-1] + 1) // 2
-    return arr[as1:as1 + original_shape[-2], as2:as2 + original_shape[-1]]
+
+    # Extract the subarray that corresponds to the original array's shape
+    return arr[..., as1:as1 + original_shape[-2], as2:as2 + original_shape[-1]]
 
 
 def generateRectangularGrid(step, minStep, Lx, Ly, noiseP=0.15):
