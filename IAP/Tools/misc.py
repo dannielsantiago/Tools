@@ -124,6 +124,27 @@ def generateFermatGrid(n, radius, minStep):
 
     return scanPos
 
+def zero_pad(arr):
+    '''
+    Pad arr with zeros to double the size. First dim is assumed to be batch dim which
+    won't be changed.
+    '''
+    out_arr = np.zeros((arr.shape[-2] * 2, arr.shape[-1] * 2), dtype=arr.dtype)
+
+    as1 = (arr.shape[-2] + 1) // 2
+    as2 = (arr.shape[-1] + 1) // 2
+    out_arr[as1:as1 + arr.shape[-2], as2:as2 + arr.shape[-1]] = arr
+    return out_arr
+
+def zero_unpad(arr, original_shape):
+    '''
+    Strip off padding of arr with zeros to halve the size. First dim is assumed to be batch dim which
+    won't be changed.
+    '''
+    as1 = (original_shape[-2] + 1) // 2
+    as2 = (original_shape[-1] + 1) // 2
+    return arr[as1:as1 + original_shape[-2], as2:as2 + original_shape[-1]]
+
 
 def generateRectangularGrid(step, minStep, Lx, Ly, noiseP=0.15):
     """
