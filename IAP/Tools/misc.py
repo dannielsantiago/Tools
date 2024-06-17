@@ -706,6 +706,40 @@ def wavelength_to_rgb(wavelength, gamma=0.8, opacity=200):
     B *= 255
     return (int(R), int(G), int(B), opacity)
 
+def OAM_phase(X, Y, l=1):
+    """
+    Calculate the phase profile of an Optical Angular Momentum (OAM) beam with a given charge.
+
+    :param X: 2D numpy array, X coordinates of the meshgrid
+    :param Y: 2D numpy array, Y coordinates of the meshgrid
+    :param l: int, charge of the OAM beam (default is 1)
+    :return: 2D numpy array, complex phase profile of the OAM beam
+    """
+    # Calculate the azimuthal angle theta
+    theta = np.arctan2(Y, X)
+    # Calculate the phase profile
+    phase_profile = np.exp(1j * l * theta)
+    return phase_profile
+
+
+def spiral_phase(X, Y, f, wavelength, n_blades=1):
+    """
+    Calculate the phase profile of a spiral phase plate with given parameters.
+
+    :param X: 2D numpy array, X coordinates of the meshgrid
+    :param Y: 2D numpy array, Y coordinates of the meshgrid
+    :param f: float, focal length
+    :param wavelength: float, wavelength of the light
+    :param n_blades: int, number of blades in the spiral phase plate (default is 1)
+    :return: 2D numpy array, complex phase profile of the spiral phase plate
+    """
+    # Calculate the azimuthal angle theta
+    theta = np.arctan2(Y, X)
+    # Calculate the radial distance r
+    r = np.sqrt(X ** 2 + Y ** 2)
+    # Calculate the phase profile
+    data = np.exp(-1j * np.pi * r ** 2 / (f * wavelength)) * np.exp(1j * n_blades * theta)
+    return data
 
 def spiral_blade_mask(wavelength=13.5e-9, f=0.6e-3, N=256, dx=10e-9, n_blades=3, blades_diameter=8e-6, angle=None):
     """
@@ -1282,6 +1316,9 @@ class MyFRC:
             res = 1 / (2 * qm[-1])  # (um)
         print(f'resolution: {res} um')
         return res
+
+
+
 
 if __name__ == "__main__":
     pass
