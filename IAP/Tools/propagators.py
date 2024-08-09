@@ -10,26 +10,42 @@ from scipy.sparse.linalg import svds
 from scipy import linalg
 from math import pi
 
-def zero_pad(arr):
+def zero_pad(arr, pad_factor_x=2, pad_factor_y=2):
     '''
-    Pad arr with zeros to double the size. First dim is assumed to be batch dim which
-    won't be changed.
-    '''
-    out_arr = np.zeros((arr.shape[-2] * 2, arr.shape[-1] * 2), dtype=arr.dtype)
+    Pad arr with zeros to enlarge the size by pad_factor_x and pad_factor_y times.
+    First dim is assumed to be batch dim which won't be changed.
 
-    as1 = (arr.shape[-2] + 1) // 2
-    as2 = (arr.shape[-1] + 1) // 2
+    Args:
+    arr (numpy.ndarray): Input array to be padded.
+    pad_factor_x (int): The factor by which to enlarge the array in the x-direction.
+    pad_factor_y (int): The factor by which to enlarge the array in the y-direction.
+
+    Returns:
+    numpy.ndarray: The padded array.
+    '''
+    # Calculate the new size of the array
+    new_shape = (arr.shape[-2] * pad_factor_y, arr.shape[-1] * pad_factor_x)
+
+    # Create the output array with zeros
+    out_arr = np.zeros(new_shape, dtype=arr.dtype)
+
+    # Calculate the starting indices for the original array in the new array
+    as1 = (new_shape[-2] - arr.shape[-2]) // 2
+    as2 = (new_shape[-1] - arr.shape[-1]) // 2
+
+    # Place the original array in the center of the output array
     out_arr[as1:as1 + arr.shape[-2], as2:as2 + arr.shape[-1]] = arr
     return out_arr
-
 
 def zero_unpad(arr, original_shape):
     '''
     Strip off padding of arr with zeros to halve the size. First dim is assumed to be batch dim which
     won't be changed.
     '''
-    as1 = (original_shape[-2] + 1) // 2
-    as2 = (original_shape[-1] + 1) // 2
+    # as1 = (original_shape[-2] + 1) // 2
+    # as2 = (original_shape[-1] + 1) // 2
+    as1 = (arr.shape[-1] - original_shape[-1]) // 2
+    as2 = (arr.shape[-2] - original_shape[-2]) // 2
     return arr[as1:as1 + original_shape[-2], as2:as2 + original_shape[-1]]
 
 
@@ -174,9 +190,17 @@ def fastPropagate(u, method='angular', Qin=None, HW=None, GPU=False):
         elif method == 'fresnel':
             u_new = np.fft.fftshift(np.fft.fft2(np.fft.ifftshift(Qin * u), norm='ortho'))
     return u_new
+def binning(arr, binFactor, method='sum'):
+    shape = (arr.shape[0] // binFactor, binFactor,
+             arr.shape[1] // binFactor, binFactor)
+    if method == 'sum':
+        return arr.reshape(shape).sum(-1).sum(1)
+    elif method == 'mean':
+        return arr.reshape(shape).mean(-1).mean(1)
 
 
-def propagate(u, method='fourier', dx=None, wavelength=None, dz=None, dq=None, bandlimit=True):
+
+def propagate(u, method='fourier', dx=None, wavelength=None, dz=None, dq=None, bandlimit=True, thetax=0, thetay=0, X0=0, Y0=0, pad_factor_x=2, pad_factor_y=2):
     '''
     propagates a guiven field using diferent methods
 
@@ -245,6 +269,32 @@ def propagate(u, method='fourier', dx=None, wavelength=None, dz=None, dq=None, b
         # Fresnel-Kirchhoff integral
         u_new = A * Q2 * fft2c(u * Q1)
 
+    elif method == 'shift_fresnel':
+        k = 2 * np.pi / wavelength
+        # source coordinates, this assumes that the field is NxN pixels
+        N = u.shape[-1]
+        L = N * dx
+
+        linspacex = np.linspace(-N / 2, N / 2, N, endpoint=False).reshape(1, N)
+        Xs = linspacex * dx
+        Ys = Xs.reshape(N, 1)
+
+        # target coordinates
+        dq = wavelength * dz / L
+        Xq = linspacex * dq
+        Yq = Xq.reshape(N, 1)
+
+        dz_ = dz * np.cos(np.deg2rad(thetax))
+        Q1 = np.exp(1j * k / (2 * dz) * (Xs ** 2 + Ys ** 2))
+        Q2 = np.exp(1j * k / (2 * dz) * ((Xq+X0) ** 2 + (Yq+Y0) ** 2))
+        Q3 = np.exp(-1j * k / dz * (Xs*X0 + Ys*Y0))
+
+        # pre-factor
+        A = 1 / (1j * wavelength * dz)
+
+        # Fresnel-Kirchhoff integral
+        u_new = A * Q2 * fft2c(u * Q1 * Q3)
+
     elif method == 'sas':
         """
         Scalable angular spectrum propagation
@@ -268,27 +318,26 @@ def propagate(u, method='fourier', dx=None, wavelength=None, dz=None, dq=None, b
         z_limit = (- 4 * L * np.sqrt(8 * L ** 2 / N ** 2 + wavelength ** 2) * np.sqrt(
             L ** 2 * 1 / (8 * L ** 2 + N ** 2 * wavelength ** 2)) \
                    / (wavelength * (-1 + 2 * np.sqrt(2) * np.sqrt(L ** 2 * 1 / (8 * L ** 2 + N ** 2 * wavelength ** 2)))))
-
-        assert dz <= z_limit
+        print(f'z_limit:{z_limit}')
+        # print(f'NA: {L/(2*z)}')
+        # assert dz <= z_limit
 
         # don't change this pad_factor, only 2 is supported
-        pad_factor = 2
+        pad_factor = 8
         L_new = pad_factor * L
         N_new = pad_factor * N
         M = wavelength * dz * N / L ** 2 / 2
-        u_p = zero_pad(u)
+        u_p = zero_pad(u, pad_factor)
         # helper varaibles
         # df = 1 / L_new
         # Lf = N_new * df
 
         # freq space coordinates for padded array
-        # f_y = np.fft.fftshift(np.fft.fftfreq(N_new, 1 / Lf).reshape(1, N_new).astype(np.float32))
-        f_y = np.fft.fftshift(np.fft.fftfreq(N_new, dx).reshape(1, N_new).astype(np.float32))
+        # f_y = np.fft.fftshift(np.fft.fftfreq(N_new, dx).reshape(1, N_new).astype(np.float32))
+        f_y = np.linspace(-N_new / 2, N_new / 2, N_new, endpoint=False).reshape(1, N_new).astype(np.float32) / L_new
         f_x = f_y.reshape(N_new, 1)
-
         # real space coordinates for padded array
-        # y = np.fft.ifftshift(np.linspace(-L_new / 2, L_new / 2, N_new, endpoint=False).reshape(1, 1, N_new), axes=(-1))
-        x = np.linspace(-L_new / 2, L_new / 2, N_new, endpoint=False).reshape(1, N_new)
+        x = np.linspace(-L_new / 2, L_new / 2, N_new, endpoint=False).reshape(1, N_new).astype(np.float32)
         y = x.reshape(N_new, 1)
 
         # bandlimit helper
@@ -302,21 +351,21 @@ def propagate(u, method='fourier', dx=None, wavelength=None, dz=None, dq=None, b
 
         # calculate kernels
         w_as = 1 - np.abs(f_x * wavelength) ** 2 - np.abs(f_y * wavelength) ** 2
-        # w_as[w_as >= 0] = np.sqrt(w_[w_ >= 0])
-        # w_[w_as < 0] = 1j*np.sqrt(w_[w_ < 0]*(-1))
-        w_as[w_as < 0] = 0
+        # w_as[w_as < 0] = 0
 
-        H_AS = np.sqrt(w_as)
+        H_AS = np.sqrt(w_as, dtype=complex)
         H_Fr = 1 - np.abs(f_x * wavelength) ** 2 / 2 - np.abs(f_y * wavelength) ** 2 / 2
         delta_H = W * np.exp(1j * k * dz * (H_AS - H_Fr))
 
         # apply precompensation
         u_precomp = ifft2c(fft2c(u_p) * delta_H)
-        dq = wavelength * dz / L_new
+        # u_precomp = zero_unpad(u_precomp, u.shape)
+        # print(u_precomp.shape)
+        dq = wavelength * dz / (u_precomp.shape[-1]*dx)
+        # dq = wavelength * dz / L
         Q = dq * N * pad_factor
 
         # output coordinates
-        # q_y = np.fft.ifftshift(np.linspace(-Q / 2, Q / 2, N_new, endpoint=False).reshape(1, 1, N_new), axes=(-1))
         q_x = np.linspace(-Q / 2, Q / 2, N_new, endpoint=False).reshape(1, N_new)
         q_y = q_x.reshape(N_new, 1)
 
@@ -328,8 +377,122 @@ def propagate(u, method='fourier', dx=None, wavelength=None, dz=None, dq=None, b
             H_2 = np.exp(1j * k * dz) * np.exp(1j * k / (2 * z) * (q_x ** 2 + q_y ** 2))
             u_p_final = H_2 * fft2c(H_1 * u_precomp)
 
-        u_new = zero_unpad(u_p_final, u.shape)
-        print(u_new.shape)
+        # u_new = zero_unpad(u_p_final, u.shape)
+        u_new = binning(u_p_final, pad_factor)
+        # print(u_new.shape)
+        # u_new = u_p_final
+
+    elif method == 'shift_sas':
+        """
+            Scalable angular spectrum propagation
+            :param u: a 2D square input field
+            :param z: propagation distance
+            :param wavelength: propagation wavelength
+            :param dx: grid spacing in original plane (u)
+            :return: propagated field and two quadratic phases
+
+            for details see:
+            Heintzmann, R., Loetgering, L., & Wechsler, F. (2023).
+            Scalable angular spectrum propagation. Optica, 10(11), 1407.
+            https://doi.org/10.1364/optica.497809
+            MIT License. Copyright (c) 2023 Felix Wechsler (info@felixwechsler.science), Rainer Heintzmann, Lars Lötgering
+            """
+
+        N = u.shape[-1]
+        L = N * dx
+        k = 2 * np.pi / wavelength
+
+        z_limit = (- 4 * L * np.sqrt(8 * L ** 2 / N ** 2 + wavelength ** 2) * np.sqrt(
+            L ** 2 * 1 / (8 * L ** 2 + N ** 2 * wavelength ** 2)) \
+                   / (wavelength * (
+                            -1 + 2 * np.sqrt(2) * np.sqrt(L ** 2 * 1 / (8 * L ** 2 + N ** 2 * wavelength ** 2)))))
+
+        # assert z <= z_limit
+
+        # don't change this pad_factor, only 2 is supported
+        # pad_factor
+        Lx_new = pad_factor_x * L
+        Ly_new = pad_factor_y * L
+        Nx_new = pad_factor_x * N
+        Ny_new = pad_factor_y * N
+        u_p = zero_pad(u, pad_factor_x, pad_factor_y)
+        dfx = 1 / Lx_new
+        dfy = 1 / Ly_new
+
+        sx = np.sin(np.deg2rad(thetax))
+        sy = np.sin(np.deg2rad(thetay))
+        tx = np.tan(np.deg2rad(thetax))
+        ty = np.tan(np.deg2rad(thetay))
+
+        # z-distance needs to be adjusted for the precompensation and for the propagation
+        z_ = dz * np.cos(np.deg2rad(thetax))
+
+        # freq space coordinates for padded array
+        Fx = np.fft.fftshift(np.fft.fftfreq(Nx_new, dx).reshape(1, Nx_new).astype(np.float32))
+        Fy = np.fft.fftshift(np.fft.fftfreq(Ny_new, dx).reshape(Ny_new, 1).astype(np.float32))
+
+        # real space coordinates for padded array
+        x = np.linspace(-Lx_new / 2, Lx_new / 2, Nx_new, endpoint=False).reshape(1, Nx_new)
+        y = np.linspace(-Ly_new / 2, Ly_new / 2, Ny_new, endpoint=False).reshape(Ny_new, 1)
+
+        # Transfer function with bandlimits
+        sqrt_chi = np.sqrt((1 / wavelength ** 2 - (Fx + sx / wavelength) ** 2 - (Fy + sy / wavelength) ** 2).astype(
+            complex)) + np.finfo(float).eps
+        HFresnel = np.exp(-1j * np.pi * dz / wavelength * ((wavelength * Fx) ** 2 + (wavelength * Fy) ** 2))
+        Omegax = dz * (tx - (Fx + sx / wavelength) / sqrt_chi + wavelength * Fx) + np.finfo(float).eps
+        Omegay = dz * (ty - (Fy + sy / wavelength) / sqrt_chi + wavelength * Fy) + np.finfo(float).eps
+
+        c = 2
+        W = (dfx <= 1 / np.abs(c * Omegax)) & (dfy <= 1 / (c * np.abs(Omegay)))
+
+        H = np.exp(
+            1j * k * z_ * np.sqrt((1 - (Fx * wavelength + sx) ** 2 - (Fy * wavelength + sy) ** 2).astype(complex))) * W
+        H *= np.conj(HFresnel) * np.exp(1j * 2 * np.pi * z_ * (tx * Fx + ty * Fy))
+
+        # apply precompensation
+        u_precomp = ifft2c(fft2c(u_p) * H)
+
+        # quadratic phase term for Fresnel Propagation
+        Q1 = np.exp(1j * k / (2 * z_) * (x ** 2 + y ** 2))
+
+        if False:  # skip final phase term, in only intensity is to be considered of u_new
+            u_p_final = fft2c(Q1 * u_precomp)
+        else:
+            dqx = wavelength * dz / Lx_new
+            dqy = wavelength * dz / Ly_new
+
+            Qx = dqx * Nx_new  # * pad_factor
+            Qy = dqy * Ny_new  # * pad_factor
+
+            # output coordinates
+            q_x = np.linspace(-Qx / 2, Qx / 2, Nx_new, endpoint=False).reshape(1, Nx_new)
+            q_y = np.linspace(-Qy / 2, Qy / 2, Ny_new, endpoint=False).reshape(Ny_new, 1)
+
+            Q2 = np.exp(1j * k * z_) * np.exp(1j * k / (2 * z_) * (q_x ** 2 + q_y ** 2))
+            u_p_final = Q2 * fft2c(Q1 * u_precomp)
+
+        # 1) Crop FOV, not desired
+        # u_new = zero_unpad(u_p_final, u.shape)
+
+        # 2) Artifacts
+        # u_new = binning(u_p_final, pad_factor, 'mean')
+
+        # 3) Artifacts
+        # real_binned = binning(u_p_final.real, pad_factor, 'mean')
+        # imag_binned = binning(u_p_final.imag, pad_factor, 'mean')
+        # u_new1 = real_binned + 1j * imag_binned
+
+        # 4) Smooth but slower than 5)
+        # real_binned = binning(np.abs(u_p_final), pad_factor, 'mean')
+        # imag_binned = binning(np.angle(u_p_final), pad_factor, 'mean')
+        # u_new2 = real_binned * np.exp(1j*imag_binned)
+
+        # 5) Fastest
+        u_new_r = cv2.resize(u_p_final.real, u.shape, interpolation=cv2.INTER_LINEAR)
+        u_new_i = cv2.resize(u_p_final.imag, u.shape, interpolation=cv2.INTER_LINEAR)
+        u_new = u_new_r + 1j * u_new_i
+        # u_new = u_p_final
+
 
     elif method == 'scaledASP':
         """

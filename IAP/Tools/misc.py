@@ -79,11 +79,13 @@ def binning_1d(arr, binFactor):
 
     return binned_array
 
-def binning(arr, binFactor):
+def binning(arr, binFactor, method='sum'):
     shape = (arr.shape[0] // binFactor, binFactor,
              arr.shape[1] // binFactor, binFactor)
-    return arr.reshape(shape).sum(-1).sum(1)
-
+    if method == 'sum':
+        return arr.reshape(shape).sum(-1).sum(1)
+    elif method == 'mean':
+        return arr.reshape(shape).mean(-1).mean(1)
 
 def bin2(X):
     """
