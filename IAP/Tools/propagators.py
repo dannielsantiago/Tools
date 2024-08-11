@@ -6,6 +6,7 @@ Created on Thu Apr 23 22:20:38 2020
 @author: r2d2
 """
 import numpy as np
+import cupy as cp
 from scipy.sparse.linalg import svds
 from scipy import linalg
 from math import pi
@@ -198,6 +199,76 @@ def binning(arr, binFactor, method='sum'):
     elif method == 'mean':
         return arr.reshape(shape).mean(-1).mean(1)
 
+
+def _RS_diffraction_integral_gpu(U_source, Xs, Ys, Xq, Yq, Zq, wavelength, dx):
+    """
+    Compute the Rayleigh-Sommerfeld diffraction integral using a vectorized implementation on the GPU.
+
+    Parameters:
+        U_source (array): Complex amplitude of the wave at the source plane.
+        Xs (array): X-coordinates on the source plane.
+        Ys (array): Y-coordinates on the source plane.
+        Xq (array): X-coordinates on the observation plane (2D array).
+        Yq (array): Y-coordinates on the observation plane (2D array).
+        Zq (array): Propagation distances (scalar or 2D array).
+        wavelength (float): Wavelength of the wave.
+        dx (float): Sampling interval on the source plane.
+
+    Returns:
+        array: Complex amplitude of the wave at the observation plane.
+    """
+    k = 2 * cp.pi / wavelength
+
+    # Broadcast Xq, Yq, Zq to match the shape of Xs and Ys
+    r = cp.sqrt((Xq[..., cp.newaxis, cp.newaxis] - Xs) ** 2 +
+                (Yq[..., cp.newaxis, cp.newaxis] - Ys) ** 2 +
+                Zq[..., cp.newaxis, cp.newaxis] ** 2)
+
+    # Compute the phase term
+    phase_term = cp.exp(1j * k * r) * Zq[..., cp.newaxis, cp.newaxis] / r ** 2
+
+    # Additional constant term
+    second_term = 1 / (2 * cp.pi) - 1j / wavelength
+
+    # Compute the Rayleigh-Sommerfeld integral
+    U_observation = cp.sum(U_source * phase_term * second_term * dx ** 2, axis=(-1, -2))
+
+    return U_observation
+
+
+def parallel_RS_diffraction_gpu(U_source, Xs, Ys, Xq, Yq, Zq, wavelength, dx):
+    """
+    Parallelized Rayleigh-Sommerfeld diffraction integral computation using GPU.
+
+    Parameters:
+        U_source (array): Complex amplitude of the wave at the source plane.
+        Xs (array): X-coordinates on the source plane.
+        Ys (array): Y-coordinates on the source plane.
+        Xq (array): X-coordinates on the observation plane (2D array).
+        Yq (array): Y-coordinates on the observation plane (2D array).
+        Zq (array): Propagation distances (2D array).
+        wavelength (float): Wavelength of the wave.
+        dx (float): Sampling interval on the source plane.
+
+    Returns:
+        array: Complex amplitude of the wave at the observation plane.
+    """
+    # Move data to GPU
+    U_source_gpu = cp.asarray(U_source)
+    Xs_gpu = cp.asarray(Xs)
+    Ys_gpu = cp.asarray(Ys)
+    Xq_gpu = cp.asarray(Xq)
+    Yq_gpu = cp.asarray(Yq)
+    Zq_gpu = cp.asarray(Zq)
+
+    # Compute the Rayleigh-Sommerfeld diffraction integral on the GPU
+    U_observation_gpu = _RS_diffraction_integral_gpu(U_source_gpu, Xs_gpu, Ys_gpu, Xq_gpu, Yq_gpu, Zq_gpu, wavelength,
+                                                    dx)
+
+    # Move result back to CPU
+    U_observation = cp.asnumpy(U_observation_gpu)
+
+    return U_observation
 
 
 def propagate(u, method='fourier', dx=None, wavelength=None, dz=None, dq=None, bandlimit=True, thetax=0, thetay=0, X0=0, Y0=0, pad_factor_x=2, pad_factor_y=2):
