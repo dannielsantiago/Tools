@@ -1,12 +1,18 @@
 import numpy as np
+try:
+    import cupy as cp
+except:
+    print('no CUPY available')
+
 from scipy.interpolate import griddata
 import os
-from propagators import propagate
+from .propagators import propagate
+from multiprocessing import Pool
 
 NUM_CPU_CORES = os.cpu_count()
 print("Number of CPU cores:", NUM_CPU_CORES)
 
-def RS_diffraction_integral(args):
+def RS_diffraction_integral_cpu(args):
     """
     Compute the Rayleigh-Sommerfeld diffraction integral using a vectorized implementation.
 
@@ -31,18 +37,90 @@ def RS_diffraction_integral(args):
     return U_observation
 
 
-def parallel_RS_diffraction(U_source, Xs, Ys, Xq, Yq, Zq, wavelength, dx, num_processes=int(NUM_CPU_CORES / 5)):
+def parallel_RS_diffraction_cpu(U_source, Xs, Ys, Xq, Yq, Zq, wavelength, dx, num_processes=int(NUM_CPU_CORES / 5)):
     observation_coordinates = np.stack((Xq.flatten(), Yq.flatten(), Zq.flatten()), axis=-1)
     # observation_coordinates_flat = np.stack([coord.flatten() for coord in observation_coordinates], axis=-1)
 
     args_list = [(U_source, Xs, Ys, x, y, z, wavelength, dx) for x, y, z in observation_coordinates]
 
     with Pool(processes=num_processes) as pool:
-        U_observation_chunks = pool.map(RS_diffraction_integral, args_list)
+        U_observation_chunks = pool.map(RS_diffraction_integral_cpu, args_list)
 
     U_observation = np.array(U_observation_chunks).reshape(Xq.shape[-2], Xq.shape[-1])
 
     return U_observation
+
+
+# Cupy accelerated RS integral
+def RS_diffraction_integral_gpu(U_source, Xs, Ys, Xq, Yq, Zq, wavelength, dx):
+    """
+    Compute the Rayleigh-Sommerfeld diffraction integral using a vectorized implementation on the GPU.
+
+    Parameters:
+        U_source (array): Complex amplitude of the wave at the source plane.
+        Xs (array): X-coordinates on the source plane.
+        Ys (array): Y-coordinates on the source plane.
+        Xq (array): X-coordinates on the observation plane (2D array).
+        Yq (array): Y-coordinates on the observation plane (2D array).
+        Zq (array): Propagation distances (scalar or 2D array).
+        wavelength (float): Wavelength of the wave.
+        dx (float): Sampling interval on the source plane.
+
+    Returns:
+        array: Complex amplitude of the wave at the observation plane.
+    """
+    k = 2 * cp.pi / wavelength
+
+    # Broadcast Xq, Yq, Zq to match the shape of Xs and Ys
+    r = cp.sqrt((Xq[..., cp.newaxis, cp.newaxis] - Xs) ** 2 +
+                (Yq[..., cp.newaxis, cp.newaxis] - Ys) ** 2 +
+                Zq[..., cp.newaxis, cp.newaxis] ** 2)
+
+    # Compute the phase term
+    phase_term = cp.exp(1j * k * r) * Zq[..., cp.newaxis, cp.newaxis] / r ** 2
+
+    # Additional constant term
+    second_term = 1 / (2 * cp.pi) - 1j / wavelength
+
+    # Compute the Rayleigh-Sommerfeld integral
+    U_observation = cp.sum(U_source * phase_term * second_term * dx ** 2, axis=(-1, -2))
+
+    return U_observation
+
+def parallel_RS_diffraction_gpu(U_source, Xs, Ys, Xq, Yq, Zq, wavelength, dx):
+    """
+    Parallelized Rayleigh-Sommerfeld diffraction integral computation using GPU.
+
+    Parameters:
+        U_source (array): Complex amplitude of the wave at the source plane.
+        Xs (array): X-coordinates on the source plane.
+        Ys (array): Y-coordinates on the source plane.
+        Xq (array): X-coordinates on the observation plane (2D array).
+        Yq (array): Y-coordinates on the observation plane (2D array).
+        Zq (array): Propagation distances (2D array).
+        wavelength (float): Wavelength of the wave.
+        dx (float): Sampling interval on the source plane.
+
+    Returns:
+        array: Complex amplitude of the wave at the observation plane.
+    """
+    # Move data to GPU
+    U_source_gpu = cp.asarray(U_source)
+    Xs_gpu = cp.asarray(Xs)
+    Ys_gpu = cp.asarray(Ys)
+    Xq_gpu = cp.asarray(Xq)
+    Yq_gpu = cp.asarray(Yq)
+    Zq_gpu = cp.asarray(Zq)
+
+    # Compute the Rayleigh-Sommerfeld diffraction integral on the GPU
+    U_observation_gpu = RS_diffraction_integral_gpu(U_source_gpu, Xs_gpu, Ys_gpu, Xq_gpu, Yq_gpu, Zq_gpu, wavelength,
+                                                    dx)
+
+    # Move result back to CPU
+    U_observation = cp.asnumpy(U_observation_gpu)
+
+    return U_observation
+
 
 def interpolate_tilted_plane(points, frame, XX, YY, XXu, YYu):
     """
