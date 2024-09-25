@@ -843,27 +843,44 @@ def re_center_ptychogram(data, center_coord):
     centered[ymin: ymax, xmin: xmax] = cropped_data
     return centered
 
-def cropCenter(ptychogram, size, shift_x=None, shift_y=None):
+def cropCenter(ptychogram, size, shift_x=None, shift_y=None, fill_value=0):
     '''
-    The parameter size corresponds to the finale size of the diffraction patterns
+    The parameter size corresponds to the final size of the diffraction patterns.
+    If the crop size is larger than the input array (in the last two dimensions),
+    the array is padded with fill_value.
     '''
     if not isinstance(size, int):
         raise TypeError('Crop value is not valid. Int expected')
 
-    x = ptychogram.shape[-1]
-    startx = x // 2 - (size // 2)
+    # Get the last two dimensions of the array
+    x, y = ptychogram.shape[-2], ptychogram.shape[-1]
 
-    startx += 1
-    starty = startx + 0
+    # Calculate the start points
+    startx = x // 2 - (size // 2)
+    starty = y // 2 - (size // 2)
+
     if shift_x is not None:
         startx += shift_x
     if shift_y is not None:
         starty += shift_y
-    print(starty)
-    print(startx)
-    ptychogram = ptychogram[..., starty: starty + size, startx: startx + size]
-    # ptychogram = ptychogram[..., starty: starty + size, startx: startx + size]
 
+    # Pad the last two dimensions if the requested crop size exceeds them
+    if size > x or size > y:
+        pad_x = max(0, (size - x) // 2)
+        pad_y = max(0, (size - y) // 2)
+        # Pad only the last two dimensions
+        ptychogram = np.pad(ptychogram, ((0, 0),) * (ptychogram.ndim - 2) + ((pad_x, pad_x), (pad_y, pad_y)),
+                            'constant', constant_values=fill_value)
+
+    # Recalculate dimensions after padding
+    x, y = ptychogram.shape[-2], ptychogram.shape[-1]
+
+    # Ensure the start points are valid after padding
+    startx = max(0, x // 2 - (size // 2)) + (shift_x if shift_x else 0)
+    starty = max(0, y // 2 - (size // 2)) + (shift_y if shift_y else 0)
+
+    # Crop the array in the last two dimensions
+    ptychogram = ptychogram[..., starty: starty + size, startx: startx + size]
 
     return ptychogram
 
