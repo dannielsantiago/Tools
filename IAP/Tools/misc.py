@@ -1334,6 +1334,68 @@ class MyFRC:
         return res
 
 
+def tappering_window(array, method='fraction', taper_value=0.3):
+    """
+    Apply Hanning tapering to the edges of a 2D array.
+
+    Parameters:
+        array (2D np.ndarray): The input array to be tapered.
+        method (str): The tapering method. Options are 'fraction' 'pixels' or 'fixed'.
+                      'fraction' applies tapering based on a fraction of the array size.
+                      'pixels' applies tapering based on a fixed number of pixels.
+                      'fixed' applies a binary threshold on the fixed number of pixels.
+        taper_value (float or int): The amount of tapering. If 'fraction', this is the
+                                    fraction of the array to taper (e.g., 0.3 for 30%).
+                                    If 'pixels', this is the number of pixels to taper at the edges.
+
+    Returns:
+        np.ndarray: The tapered array.
+    """
+    rows, cols = array.shape
+
+    if method == 'fraction':
+        # Fraction-based tapering
+        taper_row = np.hanning(int(rows * taper_value))
+        taper_col = np.hanning(int(cols * taper_value))
+
+        # Pad with ones for the inner region
+        pad_row = np.ones(rows - 2 * len(taper_row) // 2)
+        pad_col = np.ones(cols - 2 * len(taper_col) // 2)
+
+        hanning_row = np.concatenate([taper_row[:len(taper_row) // 2], pad_row, taper_row[len(taper_row) // 2:]])
+        hanning_col = np.concatenate([taper_col[:len(taper_col) // 2], pad_col, taper_col[len(taper_col) // 2:]])
+
+    elif method == 'pixels':
+        # Pixel-based tapering
+        taper_row = np.hanning(taper_value * 2)  # Create Hanning window for the number of pixels
+        taper_col = np.hanning(taper_value * 2)
+
+        # Pad with ones in the center
+        pad_row = np.ones(rows - taper_value * 2)
+        pad_col = np.ones(cols - taper_value * 2)
+
+        hanning_row = np.concatenate([taper_row[:taper_value], pad_row, taper_row[taper_value:]])
+        hanning_col = np.concatenate([taper_col[:taper_value], pad_col, taper_col[taper_value:]])
+
+    elif method == 'fixed':
+        # Ensure param is an integer
+        border_width = int(taper_value)
+        # Set the borders to zero
+        array[:border_width, :] = 0  # Top border
+        array[-border_width:, :] = 0  # Bottom border
+        array[:, :border_width] = 0  # Left border
+        array[:, -border_width:] = 0  # Right border
+
+        return array
+
+    else:
+        raise ValueError("Invalid method. Use 'fraction' 'pixels' or 'fixed'.")
+
+    # Create a 2D Hanning window using outer product
+    hanning_2d = np.outer(hanning_row, hanning_col)
+
+    # Apply the tapering by element-wise multiplication
+    return array * hanning_2d
 
 
 if __name__ == "__main__":
