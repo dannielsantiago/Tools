@@ -90,6 +90,26 @@ def fft2c(array):
     """
     return np.fft.fftshift(np.fft.fft2(np.fft.ifftshift(array), norm='ortho'))
 
+def fft2d_single_column(matrix, column_index):
+    # Step 1: Compute the FFT along the rows
+    row_fft = np.fft.fftshift(np.fft.fft(np.fft.ifftshift(matrix), axis=1, norm='ortho'))
+
+    # Step 2: Extract the column of interest from the row-wise FFT result
+    column_of_interest = row_fft[:, column_index]
+    # Step 3: Compute the FFT along the column of interest
+    column_fft = np.fft.fftshift(np.fft.fft(np.fft.ifftshift(column_of_interest), norm='ortho'))
+    return column_fft
+
+def ifft2d_single_column(matrix, column_index):
+    # Step 1: Compute the FFT along the rows
+    row_fft = np.fft.fftshift(np.fft.ifft(np.fft.ifftshift(matrix), axis=1, norm='ortho'))
+
+    # Step 2: Extract the column of interest from the row-wise FFT result
+    column_of_interest = row_fft[:, column_index]
+    # Step 3: Compute the FFT along the column of interest
+    column_fft = np.fft.fftshift(np.fft.ifft(np.fft.ifftshift(column_of_interest), norm='ortho'))
+    return column_fft
+
 
 def orthogonalizeModes(probe, numModes=None):
     '''
