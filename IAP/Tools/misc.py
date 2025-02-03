@@ -843,46 +843,88 @@ def re_center_ptychogram(data, center_coord):
     centered[ymin: ymax, xmin: xmax] = cropped_data
     return centered
 
-def cropCenter(ptychogram, size, shift_x=None, shift_y=None, fill_value=0):
-    '''
-    The parameter size corresponds to the final size of the diffraction patterns.
-    If the crop size is larger than the input array (in the last two dimensions),
-    the array is padded with fill_value.
-    '''
-    if not isinstance(size, int):
-        raise TypeError('Crop value is not valid. Int expected')
 
-    # Get the last two dimensions of the array
-    x, y = ptychogram.shape[-2], ptychogram.shape[-1]
+import numpy as np
+from scipy.ndimage import center_of_mass
 
-    # Calculate the start points
-    startx = x // 2 - (size // 2)
-    starty = y // 2 - (size // 2)
 
-    if shift_x is not None:
-        startx += shift_x
-    if shift_y is not None:
-        starty += shift_y
+def cropCenter(ptychogram, size, shift_x=None, shift_y=None, fill_value=0, center_of_mass_flag=False):
+    """
+    Crop (and, if needed, pad) an array in its last two dimensions to a square of side 'size'.
 
-    # Pad the last two dimensions if the requested crop size exceeds them
-    if size > x or size > y:
-        pad_x = max(0, (size - x) // 2)
-        pad_y = max(0, (size - y) // 2)
-        # Pad only the last two dimensions
-        ptychogram = np.pad(ptychogram, ((0, 0),) * (ptychogram.ndim - 2) + ((pad_x, pad_x), (pad_y, pad_y)),
-                            'constant', constant_values=fill_value)
+    Parameters:
+    -----------
+    ptychogram : ndarray
+        Input array. The crop is applied to the last two dimensions.
+    size : int
+        Desired size (side length) of the cropped region.
+    shift_x : int, optional
+        Additional horizontal shift (applied after center calculation).
+    shift_y : int, optional
+        Additional vertical shift (applied after center calculation).
+    fill_value : int or float, optional
+        Value used for padding if the requested crop size exceeds the array dimensions.
+    center_of_mass_flag : bool, optional
+        If True, the crop is centered on the center-of-mass computed from a 2D projection.
+        For arrays with more than 2 dimensions, the projection is computed as the mean
+        along the third dimension.
 
-    # Recalculate dimensions after padding
-    x, y = ptychogram.shape[-2], ptychogram.shape[-1]
+    Returns:
+    --------
+    cropped : ndarray
+        The cropped (and possibly padded) array.
+    """
+    # Get the spatial dimensions (last two dimensions)
+    dim_y, dim_x = ptychogram.shape[-2], ptychogram.shape[-1]
 
-    # Ensure the start points are valid after padding
-    startx = max(0, x // 2 - (size // 2)) + (shift_x if shift_x else 0)
-    starty = max(0, y // 2 - (size // 2)) + (shift_y if shift_y else 0)
+    # Pad the array if the desired crop size exceeds the current dimensions.
+    if size > dim_y or size > dim_x:
+        pad_y = max(0, (size - dim_y) // 2)
+        pad_x = max(0, (size - dim_x) // 2)
+        # Only pad the last two dimensions
+        pad_width = ((0, 0),) * (ptychogram.ndim - 2) + ((pad_y, pad_y), (pad_x, pad_x))
+        ptychogram = np.pad(ptychogram, pad_width, mode='constant', constant_values=fill_value)
+        dim_y, dim_x = ptychogram.shape[-2], ptychogram.shape[-1]
 
-    # Crop the array in the last two dimensions
-    ptychogram = ptychogram[..., starty: starty + size, startx: startx + size]
+    # Determine the starting indices for cropping.
+    if center_of_mass_flag:
+        # Compute a 2D projection if ptychogram has more than 2 dimensions.
+        if ptychogram.ndim > 2:
+            proj = np.mean(ptychogram, axis=0)
+        else:
+            proj = ptychogram
 
-    return ptychogram
+        # Use SciPy's center_of_mass to calculate the center.
+        com = center_of_mass(proj)
+        # If the computed center is invalid (e.g. if the sum is zero and results in NaNs), 
+        # default to the geometric center.
+        if np.isnan(com[0]) or np.isnan(com[1]):
+            com_y, com_x = dim_y // 2, dim_x // 2
+        else:
+            com_y, com_x = com
+
+        # Calculate the starting indices so that the crop is centered on the center of mass.
+        start_y = int(round(com_y)) - size // 2
+        start_x = int(round(com_x)) - size // 2
+
+        if shift_y is not None:
+            start_y += shift_y
+        if shift_x is not None:
+            start_x += shift_x
+    else:
+        # Use the geometric center.
+        start_y = dim_y // 2 - size // 2 + (shift_y if shift_y is not None else 0)
+        start_x = dim_x // 2 - size // 2 + (shift_x if shift_x is not None else 0)
+
+    # Ensure the starting indices are not negative.
+    start_y = max(start_y, 0)
+    start_x = max(start_x, 0)
+
+    # Crop the array along the last two dimensions.
+    cropped = ptychogram[..., start_y: start_y + size, start_x: start_x + size]
+
+    return cropped
+
 
 def phase_ramp(slope_x, slope_y, offset, shape):
     """
