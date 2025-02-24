@@ -130,15 +130,7 @@ def interpolate_tilted_plane(points, frame, XX, YY, XXu, YYu):
     :param YY: destination grid, usually same as Yd
     :return: interpolated frame
     """
-    # intensity_interp = griddata(points, frame.flatten(), (XX, YY), method='linear', fill_value=0)
-    # I_t = griddata(input_points, I_t.flatten(), (Q_x, Q_y), method='cubic', fill_value=0)
-    # intensity_interp = np.nan_to_num(intensity_interp)
-    # intensity_interp = np.clip(intensity_interp, 0, None)
-
-    # input_points = np.array([XX.flatten(), YY.flatten()]).T
     intensity_interp = griddata(points, frame.flatten(), (XXu, YYu), method='linear', fill_value=0, rescale=False)
-    # intensity_interp = np.nan_to_num(intensity_interp)
-    # intensity_interp[intensity_interp < 0] = 0
     return intensity_interp
 
 

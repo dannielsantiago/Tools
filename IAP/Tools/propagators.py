@@ -59,6 +59,29 @@ def circ(x, y, D):
     circle = (x ** 2 + y ** 2) < (D / 2) ** 2
     return circle
 
+def circ2(x,y, D):
+    """
+    generate a circle on a 2D grid
+    :param x: 2D x coordinate, normally calculated from meshgrid: x,y = np.meshgird((,))
+    :param y: 2D y coordinate, normally calculated from meshgrid: x,y = np.meshgird((,))
+    :param D: diameter
+    :return: a 2D array
+    """
+    circle = np.sqrt(x ** 2 + y ** 2) < (D / 2) ** 2
+    return circle
+
+def ellipse(x, y, width, height):
+    """
+    Generate an ellipse on a 2D grid
+    :param x: 2D x coordinate, normally calculated from meshgrid: x,y = np.meshgrid((,))
+    :param y: 2D y coordinate, normally calculated from meshgrid: x,y = np.meshgrid((,))
+    :param width: width of the ellipse (major axis)
+    :param height: height of the ellipse (minor axis)
+    :return: a 2D array
+    """
+    ellipse = ( x**2 / width**2 +  y**2 / height**2) < 1
+    return ellipse
+
 def rect(arr, threshold = 0.5):
     """
     generate a binary array containing a rectangle on a 2D grid
@@ -552,7 +575,11 @@ def propagate(u, method='fourier', dx=None, wavelength=None, dz=None, dq=None, b
                 Q1 = Q1 * Wr
 
             fsq_max = m / (2 * dz * wavelength * (1 / (N * dx)))
-            Wf = np.array(circ(Fx, Fy, 2 * fsq_max))
+            Wf = np.array(circ2(Fx, Fy, 2 * fsq_max))
+            # Wf = (np.abs(Fx) < np.abs(2*fsq_max)) * (np.abs(Fy) < np.abs(2*fsq_max))
+            # Wf = np.array(circ(Fx, Fy, 2 * fsq_max * np.sqrt(2)))
+            # Wf = np.array(circ(Fx*0, Fy, 2 * fsq_max)) * np.array(circ(Fx, Fy*0, 2 * fsq_max))
+            # Wf = np.array(circ(fsq, fsq, 2 * fsq_max))
             Q2 = Q2 * Wf
 
         # note: to be analytically correct, add Q3 (see below)
