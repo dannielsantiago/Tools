@@ -740,7 +740,7 @@ def spiral_phase(X, Y, f, wavelength, n_blades=1):
     data = np.exp(-1j * np.pi * r ** 2 / (f * wavelength)) * np.exp(1j * n_blades * theta)
     return data
 
-def spiral_blade_mask(wavelength=13.5e-9, f=0.6e-3, N=256, dx=10e-9, n_blades=3, blades_diameter=8e-6, angle=None):
+def spiral_blade_mask(wavelength=13.5e-9, f=0.6e-3, N=256, dx=10e-9, n_blades=3, blades_diameter=8e-6, angle=None, factor=0):
     """
     :param wavelength: target wavelength
     :param f: focus distance, the smaller --> more twisting of the blades around the center
@@ -748,6 +748,8 @@ def spiral_blade_mask(wavelength=13.5e-9, f=0.6e-3, N=256, dx=10e-9, n_blades=3,
     :param dx: pixel space
     :param n_blades: # of blades to generate
     :param blades_diameter: extension of the blades
+    :param angle: used to strech along x-direction the pattern
+    :param factor: [0-1] increases the fill factor of the spiral, default=0 is 50%, factor=0.6 is 70% fill factor
     :return: binary array NxN where 0 represents the blade structures
     """
     if angle is not None:
@@ -772,12 +774,13 @@ def spiral_blade_mask(wavelength=13.5e-9, f=0.6e-3, N=256, dx=10e-9, n_blades=3,
     # n_blades = n_blades % 5 + 2  #  minimum amount of blades = 2, increases to 6 anc cycles back
     data = np.exp(-1j * np.pi * r ** 2 / f / wavelength) * np.exp(1j * n_blades * phi)
 
-    binary = np.real(data) < 0
+    binary = np.real(data) < factor
+
     circ = x_grid ** 2 + y_grid ** 2 < (blades_diameter / 2) ** 2
     # circ = (x_grid/np.sqrt(2)) ** 2 + y_grid ** 2 < (blades_diameter / 2) ** 2
 
     binary = circ * binary
-    binary = (~binary).astype(int)
+    binary = (binary).astype(int)
 
     return binary
 
