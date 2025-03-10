@@ -25,6 +25,27 @@ def setCustomColorMap():
     cm = LinearSegmentedColormap.from_list("cmap", colors, n)
     return cm
 
+def setCustomColorMap_r():
+    """
+    create the colormap for diffraction data (the same as matlab)
+    return: customized matplotlib colormap
+    """
+    colors = [
+        (0.0, 0.0, 0.2),
+        (0, 0.0875, 1),
+        (0, 0.4928, 1),
+        (0, 1, 0),
+        (1, 0.6614, 0),
+        (1, 0.4384, 0),
+        (0.8361, 0, 0),
+        (0.6505, 0, 0),
+        (0.4882, 0, 0),
+    ]
+
+    n = 255  # Discretizes the interpolation into n bins
+    cm = LinearSegmentedColormap.from_list("cmap", colors[::-1], n)
+    return cm
+
 def hsv2rgb(hsv: np.ndarray) -> np.ndarray:
     """
     Convert a 3D hsv np.ndarray to rgb (5 times faster than colorsys).
@@ -91,13 +112,13 @@ def create_gif(data, scale='log', colormap=None, fps=1, output_filename='output.
         duration (float): Duration each frame is displayed in the GIF in seconds.
         output_filename (str): Filename for the output GIF.
     """
+    # Set up the writer for output GIF
+    writer = imageio.get_writer(output_filename, mode='I', format='GIF', loop=0, fps=fps)
+
     data = np.log10(data+1) if scale == 'log' else data
 
     # Normalize the data to fit within the colormap's range
-    data_normalized = (data - data.min()) / (data.max() - data.min())
-
-    # Set up the writer for output GIF
-    writer = imageio.get_writer(output_filename, mode='I', format='GIF', loop=0, fps=fps)
+    data = (data - data.min()) / (data.max() - data.min())
 
     if colormap is None:
         cmap = setCustomColorMap()
@@ -106,7 +127,7 @@ def create_gif(data, scale='log', colormap=None, fps=1, output_filename='output.
         cmap = plt.get_cmap(colormap)
 
     # Apply the colormap to each frame and write to the GIF
-    for frame in data_normalized:
+    for frame in data:
         # Apply colormap
         colored_frame = cmap(frame)  # This returns RGBA values
         # Convert RGBA to 8-bit RGB suitable for imageio
@@ -127,8 +148,8 @@ def apply_custom_colormap(image, colormap):
     - If `colormap` is a string, fall back to OpenCV's built-in colormaps.
     """
     if True:  # Custom colormap from matplotlib or user-defined
-        image = np.uint8(255 * image)  # Normalize to 0-255
-        colorized = colormap(1 - image / 255.0)
+        colorized = colormap(image)
+        # image = np.uint8(255 * image)  # Normalize to 0-255
         colorized = np.uint8(colorized[:, :, :3] * 255)  # Convert to uint8 (RGB)
     else:  # Use OpenCV colormap
         colormap_dict = {
@@ -145,20 +166,7 @@ def apply_custom_colormap(image, colormap):
     return colorized
 
 
-def normalize_data(data, scale='log'):
-    """Normalize and scale data for visualization."""
-    data = np.abs(data)  # Ensure non-negative values
-    if scale == 'log':
-        data = np.log10(data + 1)  # Avoid log(0) issues
-    elif scale == 'linear':
-        pass  # No transformation
-    # data = np.clip(data, 0, None)  # Normalize between 0 and 1
-    data = data/np.amax(data)
-
-    return data
-
-
-def create_video(data, scale='log', colormap='default', fps=1, output_filename='video.mp4'):
+def create_video(data, scale='log', colormap=None, fps=1, output_filename='video.mp4'):
     """
     Create a video from a sequence of frames.
 
@@ -174,7 +182,20 @@ def create_video(data, scale='log', colormap='default', fps=1, output_filename='
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')  # Codec for .mp4
     video_writer = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
 
+    if colormap is None:
+        cmap = setCustomColorMap()
+    else:
+        # Get the colormap
+        cmap = plt.get_cmap(colormap)
+
     frames = []
+    if np.iscomplexobj(data):
+        pass
+    else:
+        # data = normalize_data(data, scale)
+        data = np.log10(data + 1) if scale == 'log' else data
+        # Normalize the data to fit within the colormap's range
+        data = (data - data.min()) / (data.max() - data.min())
 
     for i in range(len(data)):
         frame = data[i]
@@ -182,8 +203,12 @@ def create_video(data, scale='log', colormap='default', fps=1, output_filename='
         if np.iscomplexobj(frame):
             frame = complex2rgb(frame)  # Your function for handling complex data
         else:
-            frame = normalize_data(frame, scale)
-            frame = apply_custom_colormap(frame, colormap)
+            # Apply colormap
+            colored_frame = cmap(frame)  # This returns RGBA values
+            # colored_frame = cv2.applyColorMap(frame, colormap)
+            colored_image = (255 * colored_frame).astype(np.uint8)
+            rgb_frame = colored_image[:, :, :3]
+            frame = cv2.cvtColor(rgb_frame, cv2.COLOR_RGB2BGR)
 
         frames.append(frame)
 
@@ -193,4 +218,3 @@ def create_video(data, scale='log', colormap='default', fps=1, output_filename='
 
     video_writer.release()
     print(f"VIDEO created successfully: {output_filename}")
-
