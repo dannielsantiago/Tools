@@ -5,8 +5,27 @@ Created on Thu Apr 23 22:20:38 2020
 import numpy as np
 import cupy as cp
 from scipy.sparse.linalg import svds
+from scipy.interpolate import RectBivariateSpline
 from scipy import linalg
 from math import pi
+from dataclasses import dataclass
+
+@dataclass
+class PropagationParams:
+    wavelength: float = None  # in meters
+    dz: float = None  # propagation distance in meters
+    dx: float = None  # pixel size (in meters) in source coordinate grid
+    dq: float = None # pixel size in destination grid
+    bandlimit: bool = True # used by default in fourier-based methods such as ASPW
+    thetax: float = 0  # x-tilt-angle in degrees for shift-sas propagation
+    thetay: float = 0 # y-tilt-angle in degrees for shift-sas propagation
+    X0: float = 0  # shift coordinate in meters for destination grind in shiftASPW
+    Y0: float = 0  # shift coordinate in meters for destination grind in shiftASPW
+    pad_factor_x: int = 2 #default padding factor for sas propagator
+    pad_factor_y: int = 2 #default padding factor for sas propagator
+    s_angle: float = 0  # incidence angle for reflection propagation using RS_integral, ReflectionASPW, eulerdecomposition
+    d_angle: float = 0  # incidence angle for reflection propagation using RS_integral, ReflectionASPW, eulerdecomposition
+
 
 def zero_pad(arr, pad_factor_x=2, pad_factor_y=2):
     '''
@@ -59,29 +78,6 @@ def circ(x, y, D):
     circle = (x ** 2 + y ** 2) < (D / 2) ** 2
     return circle
 
-def circ2(x,y, D):
-    """
-    generate a circle on a 2D grid
-    :param x: 2D x coordinate, normally calculated from meshgrid: x,y = np.meshgird((,))
-    :param y: 2D y coordinate, normally calculated from meshgrid: x,y = np.meshgird((,))
-    :param D: diameter
-    :return: a 2D array
-    """
-    circle = np.sqrt(x ** 2 + y ** 2) < (D / 2) ** 2
-    return circle
-
-def ellipse(x, y, width, height):
-    """
-    Generate an ellipse on a 2D grid
-    :param x: 2D x coordinate, normally calculated from meshgrid: x,y = np.meshgrid((,))
-    :param y: 2D y coordinate, normally calculated from meshgrid: x,y = np.meshgrid((,))
-    :param width: width of the ellipse (major axis)
-    :param height: height of the ellipse (minor axis)
-    :return: a 2D array
-    """
-    ellipse = ( x**2 / width**2 +  y**2 / height**2) < 1
-    return ellipse
-
 def rect(arr, threshold = 0.5):
     """
     generate a binary array containing a rectangle on a 2D grid
@@ -113,26 +109,6 @@ def fft2c(array):
     """
     return np.fft.fftshift(np.fft.fft2(np.fft.ifftshift(array), norm='ortho'))
 
-def fft2d_single_column(matrix, column_index):
-    # Step 1: Compute the FFT along the rows
-    row_fft = np.fft.fftshift(np.fft.fft(np.fft.ifftshift(matrix), axis=1, norm='ortho'))
-
-    # Step 2: Extract the column of interest from the row-wise FFT result
-    column_of_interest = row_fft[:, column_index]
-    # Step 3: Compute the FFT along the column of interest
-    column_fft = np.fft.fftshift(np.fft.fft(np.fft.ifftshift(column_of_interest), norm='ortho'))
-    return column_fft
-
-def ifft2d_single_column(matrix, column_index):
-    # Step 1: Compute the FFT along the rows
-    row_fft = np.fft.fftshift(np.fft.ifft(np.fft.ifftshift(matrix), axis=1, norm='ortho'))
-
-    # Step 2: Extract the column of interest from the row-wise FFT result
-    column_of_interest = row_fft[:, column_index]
-    # Step 3: Compute the FFT along the column of interest
-    column_fft = np.fft.fftshift(np.fft.ifft(np.fft.ifftshift(column_of_interest), norm='ortho'))
-    return column_fft
-
 
 def orthogonalizeModes(probe, numModes=None):
     '''
@@ -157,6 +133,81 @@ def orthogonalizeModes(probe, numModes=None):
     return probe, normalizedEigenvalues
 
 
+def aspwMultiMode(u, z, lambda_illu, L):
+    '''
+    ASPW wave propagation
+    u: field distribution at z = 0 (u is assumed to be square, i.e. N x N)
+    z: propagation distance
+    lambda: wavelength
+    FOVp: total size [m] of input field
+
+    returns propagated field
+    following: Matsushima et al., "Band-Limited Angular Spectrum Method for
+    Numerical Simulation of Free-Space
+    Propagation in Far and Near Fields", Optics Express, 2009
+    '''
+
+    k = 2 * np.pi / lambda_illu
+    N = u.shape[-1]
+    fx = np.arange(-N // 2, N // 2) / L
+    [Fy, Fx] = np.meshgrid(fx, fx)
+    f_max = L / (lambda_illu * np.sqrt(L ** 2 + 4 * z ** 2))
+    W = np.logical_and((abs(Fx / f_max) < 1), (abs(Fy / f_max) < 1))
+    H = np.exp(1j * k * z * np.sqrt(1 - (Fx * lambda_illu) ** 2 - (Fy * lambda_illu) ** 2))
+    U = nip.ft2d(u) * H * W
+    uNew = nip.ift2d(U)
+    return uNew
+
+
+def fresnelPropagator(N, dx, w, dz):
+    k = 2 * np.pi / w
+    # source coordinates, this assumes that the field is NxN pixels
+    L = N * dx
+    x = np.arange(-N / 2, N / 2) * dx
+    [Y, X] = np.meshgrid(x, x)
+
+    # target coordinates
+    dq = w * dz / L
+    q = np.arange(-N / 2, N / 2) * dq
+    [Qy, Qx] = np.meshgrid(q, q)
+    Qin = np.exp(1j * k / (2 * dz) * (np.square(X) + np.square(Y)))
+    # u_new = fft2c(Qin * u)
+    return Qin
+
+
+def angularPropagator(N, dx, w, dz):
+    k = 2 * np.pi / w
+    # source coordinates, this assumes that the field is NxN pixels
+    L = N * dx
+    x = np.arange(-N / 2, N / 2) * dx
+    [Y, X] = np.meshgrid(x, x)
+
+    X = np.arange(-N / 2, N / 2) / L
+    Fx, Fy = np.meshgrid(X, X)
+    f_max = L / (w * np.sqrt(L ** 2 + 4 * dz ** 2))
+    # note: see the paper above if you are not sure what this bandlimit has to do here
+    # W = rect(Fx/(2*f_max)) .* rect(Fy/(2*f_max));
+    W = circ(Fx, Fy, 2 * f_max)
+    # note: accounts for circular symmetry of transfer function and imposes bandlimit to avoid sampling issues
+    H = np.exp(1.j * k * dz * np.sqrt(1 - (Fx * w) ** 2 - (Fy * w) ** 2))
+    # u_new = ifft2c(fft2c(u) * H * W)
+    return H * W
+
+
+def fastPropagate(u, method='angular', Qin=None, HW=None, GPU=False):
+    if not GPU:
+        if method == 'angular':
+            u_new = ifft2c(fft2c(u) * HW)
+        elif method == 'fresnel':
+            u_new = fft2c(Qin * u)
+    else:
+        if method == 'angular':
+            u_new = np.fft.fftshift(np.fft.fft2(np.fft.ifftshift(u), norm='ortho')) * HW
+            u_new = np.fft.fftshift(np.fft.ifft2(np.fft.ifftshift(u_new), norm='ortho'))
+        elif method == 'fresnel':
+            u_new = np.fft.fftshift(np.fft.fft2(np.fft.ifftshift(Qin * u), norm='ortho'))
+    return u_new
+
 def binning(arr, binFactor, method='sum'):
     shape = (arr.shape[0] // binFactor, binFactor,
              arr.shape[1] // binFactor, binFactor)
@@ -164,7 +215,6 @@ def binning(arr, binFactor, method='sum'):
         return arr.reshape(shape).sum(-1).sum(1)
     elif method == 'mean':
         return arr.reshape(shape).mean(-1).mean(1)
-
 
 def _RS_diffraction_integral_gpu(U_source, Xs, Ys, Xq, Yq, Zq, wavelength, dx):
     """
@@ -201,7 +251,6 @@ def _RS_diffraction_integral_gpu(U_source, Xs, Ys, Xq, Yq, Zq, wavelength, dx):
 
     return U_observation
 
-
 def parallel_RS_diffraction_gpu(U_source, Xs, Ys, Xq, Yq, Zq, wavelength, dx):
     """
     Parallelized Rayleigh-Sommerfeld diffraction integral computation using GPU.
@@ -236,33 +285,25 @@ def parallel_RS_diffraction_gpu(U_source, Xs, Ys, Xq, Yq, Zq, wavelength, dx):
 
     return U_observation
 
-
-def propagate(u, method='fourier', dx=None, wavelength=None, dz=None, dq=None, bandlimit=True, thetax=0, thetay=0, X0=0, Y0=0, pad_factor_x=2, pad_factor_y=2):
+def propagate(u, method='fourier', **kwargs):
     '''
     propagates a guiven field using diferent methods
 
     u:          input field to propagate
     method:     'fourier','fresnel','angular'(angular spectrum)
-    dx:         pixel spacing of the input field
-    wavelength: illumination wavelength
-    dz:         distance to propagate
-
+    **kargs: see dataclass propagationParams
     returns propagated wavefront u'
     '''
-    if method == 'fourier':
-        if dz > 0:
-            # u_new = np.fft.fftshift(np.fft.fft2(u, norm='ortho'))
-            # u_new = np.fft.fftshift(np.fft.fft2(np.fft.ifftshift(u), norm='ortho'))
-            # u_new = nip.ft2d(u, norm='ortho')
-            u_new = fft2c(u)
+    params = PropagationParams(**kwargs)
 
-        else:
-            # u_new = np.fft.ifft2(np.fft.ifftshift(u), norm="ortho")
-            # u_new = u_new = np.fft.fftshift(np.fft.fft2(np.fft.ifftshift(u), norm='ortho'))
-            # u_new = nip.ift2d(u, norm='ortho')
-            u_new = ifft2c(u)
+    if method == 'fourier':
+        u_new = fft2c(u) if dz > 0 else ifft2c(u)
 
     elif method == 'aspw':
+        wavelength = params.wavelength
+        dx = params.dx
+        dz = params.dz
+
         k = 2 * np.pi / wavelength
         # source coordinates, this assumes that the field is NxN pixels
         N = u.shape[-1]
@@ -277,12 +318,18 @@ def propagate(u, method='fourier', dx=None, wavelength=None, dz=None, dq=None, b
         w = 1 / wavelength ** 2 - Fx ** 2 - Fy ** 2
         w[w >= 0] = np.sqrt(w[w >= 0])
         w[w < 0] = 0
+        # w = np.sqrt(w, dtype=complex)
         H = np.exp(1.j * 2 * np.pi * dz * w) * W
+        # H = np.exp(1.j * k * dz * w) * W
 
         U = fft2c(u)
         u_new = ifft2c(U * H)
 
     elif method == 'fresnel':
+        wavelength = params.wavelength
+        dx = params.dx
+        dz = params.dz
+
         k = 2 * np.pi / wavelength
         # source coordinates, this assumes that the field is NxN pixels
         N = u.shape[-1]
@@ -307,6 +354,12 @@ def propagate(u, method='fourier', dx=None, wavelength=None, dz=None, dq=None, b
         u_new = A * Q2 * fft2c(u * Q1)
 
     elif method == 'shift_fresnel':
+        wavelength = params.wavelength
+        dx = params.dx
+        dz = params.dz
+        X0 = params.X0
+        Y0 = params.Y0
+
         k = 2 * np.pi / wavelength
         # source coordinates, this assumes that the field is NxN pixels
         N = u.shape[-1]
@@ -347,6 +400,9 @@ def propagate(u, method='fourier', dx=None, wavelength=None, dz=None, dq=None, b
         https://doi.org/10.1364/optica.497809
         MIT License. Copyright (c) 2023 Felix Wechsler (info@felixwechsler.science), Rainer Heintzmann, Lars Lötgering
         """
+        wavelength = params.wavelength
+        dx = params.dx
+        dz = params.dz
 
         N = u.shape[-1]
         L = N * dx
@@ -416,8 +472,7 @@ def propagate(u, method='fourier', dx=None, wavelength=None, dz=None, dq=None, b
 
         # u_new = zero_unpad(u_p_final, u.shape)
         u_new = binning(u_p_final, pad_factor)
-        # print(u_new.shape)
-        # u_new = u_p_final
+
 
     elif method == 'shift_sas':
         """
@@ -434,6 +489,13 @@ def propagate(u, method='fourier', dx=None, wavelength=None, dz=None, dq=None, b
             https://doi.org/10.1364/optica.497809
             MIT License. Copyright (c) 2023 Felix Wechsler (info@felixwechsler.science), Rainer Heintzmann, Lars Lötgering
             """
+        wavelength = params.wavelength
+        dx = params.dx
+        dz = params.dz
+        pad_factor_x = params.pad_factor_x
+        pad_factor_y = params.pad_factor_y
+        thetax = params.thetax
+        thetay = params.thetay
 
         N = u.shape[-1]
         L = N * dx
@@ -530,7 +592,6 @@ def propagate(u, method='fourier', dx=None, wavelength=None, dz=None, dq=None, b
         u_new = u_new_r + 1j * u_new_i
         # u_new = u_p_final
 
-
     elif method == 'scaledASP':
         """
         Angular spectrum propagation with customized grid spacing dq
@@ -544,6 +605,11 @@ def propagate(u, method='fourier', dx=None, wavelength=None, dz=None, dq=None, b
         note: to be analytically correct, add Q3 (see below)
         if only intensities matter, leave it out
         """
+        wavelength = params.wavelength
+        dx = params.dx
+        dz = params.dz
+        dq = params.dq
+
         # optical wavenumber
         k = 2 * np.pi / wavelength
         # assume square grid
@@ -575,11 +641,7 @@ def propagate(u, method='fourier', dx=None, wavelength=None, dz=None, dq=None, b
                 Q1 = Q1 * Wr
 
             fsq_max = m / (2 * dz * wavelength * (1 / (N * dx)))
-            Wf = np.array(circ2(Fx, Fy, 2 * fsq_max))
-            # Wf = (np.abs(Fx) < np.abs(2*fsq_max)) * (np.abs(Fy) < np.abs(2*fsq_max))
-            # Wf = np.array(circ(Fx, Fy, 2 * fsq_max * np.sqrt(2)))
-            # Wf = np.array(circ(Fx*0, Fy, 2 * fsq_max)) * np.array(circ(Fx, Fy*0, 2 * fsq_max))
-            # Wf = np.array(circ(fsq, fsq, 2 * fsq_max))
+            Wf = np.array(circ(Fx, Fy, 2 * fsq_max))
             Q2 = Q2 * Wf
 
         # note: to be analytically correct, add Q3 (see below)
@@ -603,7 +665,13 @@ def propagate(u, method='fourier', dx=None, wavelength=None, dz=None, dq=None, b
         2. Then a scaledASP to propagate field to the detector
         3. Then another coordinate rotation if detector is tilted detectAngle
         """
-
+        wavelength = params.wavelength
+        dx = params.dx
+        dz = params.dz
+        dq = params.dq
+        s_angle = params.s_angle
+        d_angle = params.d_angle
+        bandlimit = params.bandlimit
         # 1st step
         rad = np.deg2rad(s_angle)# *-1?
         k = 2 * np.pi / wavelength
@@ -634,10 +702,15 @@ def propagate(u, method='fourier', dx=None, wavelength=None, dz=None, dq=None, b
         URot = np.empty_like(Ud)
 
         fx = np.squeeze(Fx)
-        for i in range(URot.shape[0]):
-            interp_spline_r = RectBivariateSpline(fx, fx, np.real(Ud[i, ...]))
-            interp_spline_i = RectBivariateSpline(fx, fx, np.imag(Ud[i, ...]))
-            URot[i, ...] = interp_spline_r(fx, fxRot) + 1j * interp_spline_i(fx, fxRot)
+        if np.ndim(URot)>2:
+            for i in range(URot.shape[0]):
+                interp_spline_r = RectBivariateSpline(fx, fx, np.real(Ud[i, ...]))
+                interp_spline_i = RectBivariateSpline(fx, fx, np.imag(Ud[i, ...]))
+                URot[i, ...] = interp_spline_r(fx, fxRot) + 1j * interp_spline_i(fx, fxRot)
+        else:
+            interp_spline_r = RectBivariateSpline(fx, fx, np.real(Ud))
+            interp_spline_i = RectBivariateSpline(fx, fx, np.imag(Ud))
+            URot = interp_spline_r(fx, fxRot) + 1j * interp_spline_i(fx, fxRot)
 
         u = ifft2c(URot * W * jacobian)
 
@@ -706,10 +779,15 @@ def propagate(u, method='fourier', dx=None, wavelength=None, dz=None, dq=None, b
         fxRot -= np.sin(rad) / wavelength  # frequency shift for u_0
         URot = np.empty_like(Ud)
 
-        for i in range(URot.shape[0]):
-            interp_spline_r = RectBivariateSpline(fx, fx, np.real(Ud[i, ...]))
-            interp_spline_i = RectBivariateSpline(fx, fx, np.imag(Ud[i, ...]))
-            URot[i, ...] = interp_spline_r(fx, fxRot) + 1j * interp_spline_i(fx, fxRot)
+        if np.ndim(URot)>2:
+            for i in range(URot.shape[0]):
+                interp_spline_r = RectBivariateSpline(fx, fx, np.real(Ud[i, ...]))
+                interp_spline_i = RectBivariateSpline(fx, fx, np.imag(Ud[i, ...]))
+                URot[i, ...] = interp_spline_r(fx, fxRot) + 1j * interp_spline_i(fx, fxRot)
+        else:
+            interp_spline_r = RectBivariateSpline(fx, fx, np.real(Ud))
+            interp_spline_i = RectBivariateSpline(fx, fx, np.imag(Ud))
+            URot = interp_spline_r(fx, fxRot) + 1j * interp_spline_i(fx, fxRot)
 
         # interpolate Fourier spectrum on tilted plane
         u_new = ifft2c(URot * W * jacobian)
@@ -720,6 +798,13 @@ def propagate(u, method='fourier', dx=None, wavelength=None, dz=None, dq=None, b
         2. Then a scaledASP to propagate field to the detector
         3. Then another coordinate rotation if detector is tilted detectAngle
         """
+        wavelength = params.wavelength
+        dx = params.dx
+        dz = params.dz
+        dq = params.dq
+        s_angle = params.s_angle
+        d_angle = params.d_angle
+        bandlimit = params.bandlimit
 
         # 1st step
         rad = -s_angle / 180 * np.pi
@@ -735,8 +820,12 @@ def propagate(u, method='fourier', dx=None, wavelength=None, dz=None, dq=None, b
         # rotate around the x axis in the source plane
         Ud = fft2c(u)
         URot = np.empty_like(Ud)
-        for i in range(URot.shape[0]):
-            URot[i, ...] = rotate_around_x(Fx, Fy, Ud[i, ...], wavelength, rad, Fx, Fy)[0]
+        if np.ndim(URot)>2:
+            for i in range(URot.shape[0]):
+                URot[i, ...] = rotate_around_x(Fx, Fy, Ud[i, ...], wavelength, rad, Fx, Fy)[0]
+        else:
+            URot = rotate_around_x(Fx, Fy, Ud, wavelength, rad, Fx, Fy)[0]
+
         u = ifft2c(URot * W)
 
         # 2. Step scaled ASP
@@ -803,8 +892,12 @@ def propagate(u, method='fourier', dx=None, wavelength=None, dz=None, dq=None, b
         # rotate around the x axis in the detector plane
         Ud = fft2c(u)
         URot = np.empty_like(Ud)
-        for i in range(URot.shape[0]):
-            URot[i, ...] = rotate_around_x(Fx, Fy, Ud[i, ...], wavelength, rad, Fx, Fy)[0]
+        if np.ndim(URot) > 2:
+            for i in range(URot.shape[0]):
+                URot[i, ...] = rotate_around_x(Fx, Fy, Ud[i, ...], wavelength, rad, Fx, Fy)[0]
+        else:
+            URot = rotate_around_x(Fx, Fy, Ud, wavelength, rad, Fx, Fy)[0]
+
         u_new = ifft2c(URot * W)
 
     return u_new
@@ -1111,6 +1204,84 @@ def generate_ProbeModes(illu, wavelength, pinhole, Np, Xp, Yp, zs, nModes=None, 
     return sphericalWavelets, probeModes, normalizedEigenvalues, purity
 
 
+def createProbe(Np, dxp, wavelength, diameter, f=None):
+    Lp = Np * dxp
+    xp = np.arange(-Np / 2, Np / 2) * dxp
+    Yp, Xp = np.meshgrid(xp, xp)
+    # pinhole = nip.rr((Np, Np)) < (diameter / (2 * dxp))
+    # blur the edges by convolving with a small kernel i.e 5
+    if f is not None:
+        probe = pinhole * np.exp(1j * 2 * np.pi / wavelength * (Xp**2 + Yp**2) / 2 / f)
+        return probe
+    else:
+        return probe
+
+def u_limit(L,dz,w, x0=0, sign='+'):
+    if sign == '+':
+        u_limit = 1 / (w * np.sqrt(1 + (dz ** 2) / (x0 + L) ** 2))
+    if sign == '-':
+        u_limit = 1 / (w * np.sqrt(1 + (dz ** 2) / (x0 - L) ** 2))
+    # print(f'u_limit{x0}{sign}:{u_limit}')
+    return u_limit
+
+def table2avoidAliasing(x0,L,dz,w):
+    """
+    See Table 1 in:
+    K. Matsushima, “Shifted angular spectrum method for
+    off-axis numerical propagation,” Opt. Express,
+    vol. 18, no. 17, p. 18453, 2010, doi: 10.1364/oe.18.018453.
+    """
+    u_plus = u_limit(L, dz, w, x0, '+')
+    u_minus = u_limit(L, dz, w, x0, '-')
+    Sx = 2*L
+    if Sx < x0:
+        u0 = (u_plus + u_minus) / 2
+        u_width = u_plus - u_minus
+    if -Sx <= x0 < Sx:
+        u0 = (u_plus - u_minus) / 2
+        u_width = u_plus + u_minus
+    if x0 <= -Sx:
+        u0 = -(u_plus + u_minus) / 2
+        u_width = u_minus - u_plus
+
+    return u0, u_width
+
+def shif_ASPW(u, N, dx, w, dz, x0=0, y0=0, bandlimit=True):
+    k = 2 * np.pi / w
+    L =  N * dx
+    X = np.arange(-N / 2, N / 2) / L
+    Fx, Fy = np.meshgrid(X, X)
+
+    W = np.ones_like(u)
+    if bandlimit and x0 == 0 and y0 == 0:
+        f_max = u_limit(L,dz,w)
+        W = circ(Fx, Fy, 2 * f_max)
+
+    # observation plane shifted by x0 and y0
+    Wx = np.ones_like(u, dtype=np.float32)
+    Wy = np.ones_like(u, dtype=np.float32)
+    if x0 != 0:
+        u0, u_width = table2avoidAliasing(x0, L, dz, w)
+        Wx = rect(Fx - u0, u_width)
+    if y0 != 0:
+        v0, v_width = table2avoidAliasing(y0, L, dz, w)
+        Wy = rect(Fy - v0, v_width)
+
+    # note: accounts for circular symmetry of transfer function and imposes bandlimit to avoid sampling issues
+    # H = np.exp(1.j * k * (x0*Fx*w + y0*Fy*w + dz * np.sqrt(1 - (Fx * w) ** 2 - (Fy * w) ** 2)))
+    arg = np.power(w, -2) - Fx ** 2 - Fy ** 2
+    arg[arg<0]=0
+    H = np.exp(1.j * 2*np.pi * (x0 * Fx + y0 * Fy + dz * np.sqrt(arg))) * W * Wx * Wy
+    u_new = ifft2c(fft2c(u) * H)
+
+    # plt.figure()
+    # plt.title('WxWy')
+    # plt.imshow(Wx*Wy)
+    # plt.colorbar()
+    # plt.show()
+
+    return u_new, H
+
 def complex_colorize(z, rmin=False, rmax=False, hue_start=180):
     """ Returns a real RGB image base on some complex input. """
     from matplotlib.colors import hsv_to_rgb
@@ -1156,6 +1327,131 @@ def viz(image, title='none', x_dim=False, y_dim=False):
 
     return
 
+# off-axis propagation using shifted planes angular spectrum. pre-calculate the propagator
+def precalc_prop_np(u, dl, lmb, z, sx=0, sy=0, x0=0, y0=0,NA_max=1):
+    '''
+
+    Parameters
+    ----------
+    shape : (int, int)
+        shape of the field, usually square.
+    lmb : double
+        wavelength of light.
+    z : double
+        distance field propagated in micro metre.
+    dl : double
+        pixel size in micro metre.
+    sx : double, optional
+        sensor area size x direction in micro metre. The default is 0.
+    sy : double, optional
+        sensor area size y direction in micro metre. The default is 0.
+    x0 : double, optional
+        centre of field shifted in x direction in micro metre. The default is 0.
+    y0 : double, optional
+        centre of field shifted in y direction in micro metre. The default is 0.
+    NA_max : double, optional
+        maximum of numerical aperture. The default is 1.
+
+    Returns
+    -------
+    complex 128
+        Returns an array which has the propagator values. Multiplication with
+        a Fourier space field will propagate the field by z distance.
+        eg. propagate the field from the sample plane to the sensor plane.
+
+        This method is based on work by K. Matsushima:
+        https://doi-org.proxy.library.uu.nl/10.1364/OE.18.018453
+
+    '''
+
+    def U0(x0, lmb, z, Sx, up, um):
+        if Sx < x0:
+            return (up + um) / 2
+        elif x0 <= -Sx:
+            return -(up + um) / 2
+        else:
+            return (up - um) / 2
+
+    def Uwidth(x0, lmb, z, Sx, up, um):
+        if Sx < x0:
+            return up - um
+        elif x0 <= -Sx:
+            return um + up
+        else:
+            return up + um
+
+    def rect(x):
+        if np.abs(x) > 0.5:
+            return 0
+        elif np.abs(x) == 0.5:
+            return 0.5
+        else:
+            return 1
+
+    [m, n] = np.shape(u)
+
+    if sx == 0:
+        sx = dl * m
+    if sy == 0:
+        sy = dl * n
+
+    [x, y] = np.meshgrid(np.arange(-n / 2, n / 2),
+                         np.arange(-m / 2, m / 2))
+
+    fx = (x / (dl * m))  # frequency space width [1/m]
+    fy = (y / (dl * n))  # frequency space height [1/m]
+
+    freq = np.fft.fftfreq(n, dl)
+    stepsize = freq[1]
+
+    if True:
+        up = np.power((np.power((x0 + 1 / (2 * (2.0 * sx) ** -1)), -2) * z ** 2 + 1), -0.5) / lmb
+        um = np.power((np.power((x0 - 1 / (2 * (2.0 * sx) ** -1)), -2) * z ** 2 + 1), -0.5) / lmb
+        vp = np.power((np.power((y0 + 1 / (2 * (2.0 * sy) ** -1)), -2) * z ** 2 + 1), -0.5) / lmb
+        vm = np.power((np.power((y0 + 1 / (2 * (2.0 * sy) ** -1)), -2) * z ** 2 + 1), -0.5) / lmb
+
+        u0 = U0(x0, lmb, z, sx, up, um)
+        uwidth = Uwidth(x0, lmb, z, sx, up, um)
+
+        v0 = U0(y0, lmb, z, sy, vp, vm)
+        vwidth = Uwidth(y0, lmb, z, sy, vp, vm)
+
+        arrX = np.zeros((m, n), dtype='complex128')
+        arrY = np.zeros((m, n), dtype='complex128')
+
+        for i in range(m):
+            for j in range(n):
+                arrX[i, j] = rect((fx[i, j] - u0) / (uwidth))
+                arrY[i, j] = rect((fy[i, j] - v0) / (vwidth))
+
+        fourier_crop = arrX * arrY
+
+    k0 = 2 * np.pi / lmb
+    alpha = 2 * np.pi * fx
+    beta = 2 * np.pi * fy
+    if False:
+        # NA filtering
+
+        # Implementing a slight smoothing filter of the propagator
+        filter_init = np.zeros(shape, dtype=np.complex_)
+        smoothmax = 1.1
+        smoothmin = 0.9
+        dist2 = alpha ** 2 + beta ** 2
+        X, Y = np.where(smoothmin ** 2 * NA_max ** 2 * k0 ** 2 > alpha ** 2 + beta ** 2)
+        filter_init[X, Y] = 1
+        xgauss, ygauss = np.where(np.logical_and(smoothmin ** 2 * NA_max ** 2 * k0 ** 2 < dist2,
+                                                 smoothmax ** 2 * NA_max ** 2 * k0 ** 2 > dist2))
+        filter_init[xgauss, ygauss] = np.exp(-(dist2[xgauss, ygauss] - NA_max ** 2 * k0 ** 2 * smoothmin ** 2) / (
+                    k0 ** 2 * NA_max ** 2 * (smoothmax ** 2 - smoothmin ** 2) * 0.5))
+        filter_init = np.roll(filter_init, int(u0 / stepsize), 1)
+
+    gamma = np.sqrt(k0 ** 2 - alpha ** 2 - beta ** 2)
+    # to prevent an datatype error cast gamma to Ein datatype
+    gamma = gamma.astype(dtype='complex128')
+    H = np.exp(1j * gamma * z) * np.exp(1j * 2 * np.pi * (x0 * fx + y0 * fy)) * fourier_crop #* filter_init
+    u_new = ifft2c(fft2c(u) * H)
+
+    return u_new, propagator
 
 if __name__ == "__main__":
     pass
