@@ -10,7 +10,8 @@ from scipy.ndimage import shift, gaussian_filter, center_of_mass
 from numpy.fft import fft2, fftshift
 import scipy.ndimage as ndi
 from matplotlib.colors import LinearSegmentedColormap
-
+from scipy.ndimage import center_of_mass
+import multiprocessing
 def setCustomColorMap():
     """
     create the colormap for diffraction data (the same as matlab)
@@ -847,8 +848,7 @@ def re_center_ptychogram(data, center_coord):
     return centered
 
 
-import numpy as np
-from scipy.ndimage import center_of_mass
+
 
 
 def cropCenter(ptychogram, size, shift_x=None, shift_y=None, fill_value=0, center_of_mass_flag=False):
@@ -1442,6 +1442,239 @@ def tappering_window(array, method='fraction', taper_value=0.3):
     # Apply the tapering by element-wise multiplication
     return array * hanning_2d
 
+
+
+def generate_rectangular_spiral_indices(rows, cols):
+    indices = []
+
+    top = 0
+    bottom = rows - 1
+    left = 0
+    right = cols - 1
+
+    while top <= bottom and left <= right:
+        # Move right along the top row
+        for j in range(left, right + 1):
+            indices.append((top, j))
+
+        # Move down along the right column (excluding the top element)
+        for i in range(top + 1, bottom + 1):
+            indices.append((i, right))
+
+        # Move left along the bottom row (excluding the rightmost element)
+        if top < bottom:
+            for j in range(right - 1, left - 1, -1):
+                indices.append((bottom, j))
+
+        # Move up along the left column (excluding the bottom element)
+        if left < right:
+            for i in range(bottom - 1, top, -1):
+                indices.append((i, left))
+
+        top += 1
+        bottom -= 1
+        left += 1
+        right -= 1
+
+    return np.array(indices)[::-1]
+
+def find_closest_to_center(points, center=None):
+    if center is None:
+        center = np.mean(points, axis=0)
+
+    centered_points = points - center
+    distances = np.linalg.norm(centered_points, axis=1)
+    closest_index = np.argmin(distances)
+    return closest_index
+
+def com_from_2sets(cluster1, cluster2):
+    # Compute the center of mass of each cluster
+    com1 = np.mean(cluster1, axis=0)
+    com2 = np.mean(cluster2, axis=0)
+    # return (com1+com2)/2
+
+    # Compute the weighted center of mass of the two clusters
+    total_mass = cluster1.shape[0] + cluster2.shape[0]
+    weighted_com = (com1 * cluster1.shape[0] + com2 * cluster2.shape[0]) / total_mass
+    return weighted_com
+
+def divide_scan_and_optimize_tsp(xy, J, K):
+    # Find the minimum and maximum values of x and y
+    min_x = np.min(xy[:, -1])
+    max_x = np.max(xy[:, -1])
+    min_y = np.min(xy[:, -2])
+    max_y = np.max(xy[:, -2])
+
+    # Calculate the width and height of each subset in the grid
+    subset_width = (max_x - min_x) / J
+    subset_height = (max_y - min_y) / K
+
+    # Create an empty dictionary to hold the points in each subset
+    subsets = []
+
+    # sets the indices into an s pattern
+    indices = generate_rectangular_spiral_indices(J, K)
+    # Loop over each subset in the grid
+    for indice in indices:
+        i = indice[0]
+        j = indice[1]
+        # Calculate the boundaries of the subset
+        subset_x_min = min_x + i * subset_width
+        subset_x_max = min_x + (i + 1) * subset_width
+        subset_y_min = min_y + j * subset_height
+        subset_y_max = min_y + (j + 1) * subset_height
+        print('----')
+        print(f'{i}{j}')
+        print(subset_x_min)
+        print(subset_x_max)
+        print(subset_y_min)
+        print(subset_y_max)
+        print('----')
+        # Find the indices of the points that fall within the subset
+
+        subset_indices = np.where((xy[:, -1] >= subset_x_min) &
+                                  (xy[:, -1] <= subset_x_max) &
+                                  (xy[:, -2] >= subset_y_min) &
+                                  (xy[:, -2] <= subset_y_max))[0]
+
+        # Get the subset points using the indices
+        subset_points = xy[subset_indices]
+        # Add the subset points to the dictionary
+        subsets.append(subset_points)
+
+    # finds the center of the first subset and set it to be first position:
+    c_index = find_closest_to_center(subsets[0])
+    center = (subsets[0][c_index]) + 0
+    subsets[0][c_index] = subsets[0][0]
+    subsets[0][0] = center
+
+    # finds the closest point for each neighbor cluster and set it to the end/initial point
+    for i in range(len(subsets) - 1):
+        weighted_com = com_from_2sets(subsets[i], subsets[i + 1])
+        c_index1 = find_closest_to_center(subsets[i], weighted_com)
+        c_index2 = find_closest_to_center(subsets[i + 1], weighted_com)
+        # replace c_index1 at the end of its cluster
+        temp_closest = (subsets[i][c_index1]) + 0
+        subsets[i][c_index1] = subsets[i][-1] + 0
+        subsets[i][-1] = temp_closest + 0
+        # #replace c_index2 at the beginning of its cluster
+        temp_closest = (subsets[i + 1][c_index2]) + 0
+        subsets[i + 1][c_index2] = subsets[i + 1][0]
+        subsets[i + 1][0] = temp_closest + 0
+
+    # creates a multiprocessing pool
+    pool = multiprocessing.Pool()
+
+    # Apply the tbs function to each element in the list using map_async
+    results = pool.map_async(apply_tsp, subsets)
+
+    # get the results as a list
+    subsets = results.get()
+
+    # close the pool
+    pool.close()
+
+    # Stack the subsets together
+    xy = np.concatenate(subsets, axis=0)
+    # use the center to re-align the scanning grid
+    xy -= center
+
+    return xy
+
+def apply_tsp(xy):
+    # new_xy = tsp(xy)
+    # new_xy = new_xy[:-1,:]
+    # new_route = two_opt(new_xy)
+    # new_xy = new_xy[new_route]
+
+    # R = xy[:, 0]
+    # C = xy[:, 1]
+    # pre_route = precondition_route(R, C)
+    # Rnew = R[pre_route]
+    # Cnew = C[pre_route]
+    # xy = np.vstack((Rnew, Cnew)).T
+    new_route = two_opt(xy)
+    new_xy = xy[new_route]
+    return new_xy
+
+
+def two_opt(cities): # 2-opt Algorithm adapted from https://en.wikipedia.org/wiki/2-opt
+    route = np.arange(cities.shape[0]) # Make an array of row numbers corresponding to cities.
+    improvement_factor = 1 # Initialize the improvement factor.
+    best_distance = path_distance(route,cities) # Calculate the distance of the initial path.
+    i = 0
+    progress = True
+    while progress: # If the route is still improving, keep going!
+        progress = False
+        i += 1
+        print(f'{i} {best_distance}', '.' * i, end='\r')
+        for swap_first in range(1,len(route)-1): # From each city except the first and last,
+            for swap_last in range(swap_first+1,len(route)-1): # to each of the cities following,
+                new_route = two_opt_swap(route,swap_first,swap_last) # try reversing the order of these cities
+                new_distance = path_distance(new_route,cities) # and check the total distance with this modification.
+                if new_distance < best_distance: # If the path distance is an improvement,
+                    route = new_route # make this the accepted best route
+                    best_distance = new_distance # and update the distance corresponding to this route.
+                    progress=True
+    return route # When the route is no longer improving, stop searching and return the route.
+
+path_distance = lambda r,c: np.sum([np.linalg.norm(c[r[p]]-c[r[p-1]]) for p in range(len(r))])
+
+two_opt_swap = lambda r,i,k: np.concatenate((r[0:i],r[k:-len(r)+i-1:-1],r[k+1:len(r)]))
+
+
+def farthest_point_sampling(points, subset_size):
+    """
+    Selects a subset of points using farthest point sampling.
+
+    Parameters:
+        points (np.array): Array of shape (n_points, n_dimensions).
+        subset_size (int): Number of points to sample.
+
+    Returns:
+        np.array: Subset of points.
+    """
+    n_points = len(points)
+    if subset_size >= n_points:
+        return points
+
+    # Initialize: choose a random starting index
+    indices = [np.random.randint(0, n_points)]
+    indices = [0]
+    # Initialize distance array with infinity
+    distances = np.full(n_points, np.inf)
+
+    for _ in range(1, subset_size):
+        last_selected = points[indices[-1]]
+        # Update distances: compute the distance from the last selected point to all points
+        d = np.linalg.norm(points - last_selected, axis=1)
+        # Keep the minimum distance to any selected point so far
+        distances = np.minimum(distances, d)
+        # Select the next point as the one with the maximum distance to the selected set
+        next_index = np.argmax(distances)
+        indices.append(next_index)
+
+    return points[indices], indices
+
+def select_subset_indices(points, size, TSP=False):
+    set, indices = farthest_point_sampling(points, size)
+    if TSP:
+        route = two_opt(set)
+        return np.array(indices)[route.astype(int)]
+    else:
+        return np.array(indices)
+def calculate_distances(points):
+    # Function to calculate Euclidean distances between consecutive points
+    distances = np.sqrt(np.sum(np.diff(points, axis=0)**2, axis=1))
+    return distances
+
+def calcuate_avg_step_size(points):
+    """
+    :param points: encoder points [npos, 2]
+    :return: avg step-size, std
+    """
+    distances = calculate_distances(points)
+    return np.mean(distances), np.std(distances)
 
 if __name__ == "__main__":
     pass
