@@ -1320,12 +1320,32 @@ class MyFRC:
         axes[1].set_axis_off()
         fig.tight_layout()
         fig.show()
-    
+    def compute_custom_frc(self, slit_mask, fft_image1, fft_image2):
+        if np.sum(slit_mask) == 0:
+            return  0
+        else:
+            num = np.sum(np.conj(fft_image1[slit_mask]) * fft_image2[slit_mask])
+            den = np.sqrt(
+                np.sum(np.abs(fft_image1[slit_mask]) ** 2) *
+                np.sum(np.abs(fft_image2[slit_mask]) ** 2)
+            )
+            return num / den if den != 0 else 0
+
     def calculateFRC(self):
         y_shape = self.object_1c.shape[0]
         x_shape = self.object_1c.shape[1]
         R = self.object_1c.shape[0] / 2
-        
+
+        # Create coordinate grids
+        center_y, center_x = y_shape // 2, x_shape // 2
+        Y, X = np.indices((y_shape, x_shape))
+        dx = X - center_x
+        dy = Y - center_y
+        r_grid = np.sqrt(dx ** 2 + dy ** 2)
+        angle_grid = np.arctan2(dy, dx)  # angle in radians, range (-pi, pi]
+        # Convert tolerance to radians
+        tol = np.deg2rad(15)
+
         window_func = np.hanning(y_shape).reshape(1, -1) * np.hanning(x_shape).reshape(-1, 1)
         
         fft_image1 = fftshift(fft2(fftshift(self.object_1c * window_func)))
@@ -1335,6 +1355,9 @@ class MyFRC:
         conj_image1 = np.conj(fft_image1)
 
         self.frc = np.zeros(int(np.min([x_shape, y_shape]) / 2), dtype=complex)
+        self.frc_y = np.zeros_like(self.frc)
+        self.frc_x1 = np.zeros_like(self.frc)
+        self.frc_x2 = np.zeros_like(self.frc)
         self.one_bit_crit = np.zeros_like(self.frc)
         self.half_bit_crit = np.zeros_like(self.frc)
     
@@ -1346,11 +1369,30 @@ class MyFRC:
             # check complex value/real value
             self.frc[r-1] = np.sum(ring * conj_image1 * fft_image2) / np.sqrt(np.sum(ring * np.abs(fft_image1)**2) * np.sum(ring * np.abs(fft_image2)**2))
 
+            # X-axis slit: select pixels with angles near 0 or π.
+            # (i.e. Fourier components along the horizontal axis)
+            slit_mask_x1 = ring.astype(bool)  & (np.abs(angle_grid) < tol)
+            slit_mask_x2 = ring.astype(bool)  & (np.abs(np.pi - np.abs(angle_grid)) < tol)
+            # Y-axis slit: select pixels with angles near π/2 or -π/2.
+            # (i.e. Fourier components along the vertical axis)
+            slit_mask_y = ring.astype(bool)  & (
+                    (np.abs(angle_grid - np.pi / 2) < tol) | (np.abs(angle_grid + np.pi / 2) < tol)
+            )
+            self.frc_x1[r - 1] = self.compute_custom_frc(slit_mask_x1, fft_image1, fft_image2)
+            self.frc_x2[r - 1] = self.compute_custom_frc(slit_mask_x2, fft_image1, fft_image2)
+            self.frc_y[r - 1] = self.compute_custom_frc(slit_mask_y, fft_image1, fft_image2)
+
+
+
     def plotFRC(self):
         n_ticks = 10
         fig, ax = plt.subplots(nrows=1, ncols=1, figsize=(4, 3), dpi=150)
         fig.suptitle(f'FRC')
         ax.plot(self.frc, label=f'FRC')
+        ax.plot(self.frc_x1, label=f'FRC_x1')
+        ax.plot(self.frc_x2, label=f'FRC_x2')
+        ax.plot(self.frc_y, label=f'FRC_y')
+
         ax.plot(self.half_bit_crit, '--', label='1/2 bit')
         self.qmax = 1 / (2 * self.dx * 1e6)
         self.Fx = np.round(np.linspace(0, self.qmax, n_ticks), decimals=3)
@@ -1377,6 +1419,30 @@ class MyFRC:
             res = 1 / (2 * qm[-1])  # (um)
         print(f'resolution: {res} um')
         return res
+
+    def get_res(self, index, qm):
+        if len(index) > 0:
+            index = index[0]
+            res = 1 / (2 * qm[index])  # (um)
+        else:
+            res = 1 / (2 * qm[-1])  # (um)
+        print(f'resolution: {res} um')
+        return res
+
+    def get_spatial_resolution_individual(self):
+        # half bit criteria
+        qm = np.linspace(0, self.qmax, self.frc.shape[-1])
+        index = np.argwhere(self.frc < self.half_bit_crit)
+        index_x1 = np.argwhere(self.frc_x1 < self.half_bit_crit)
+        index_x2 = np.argwhere(self.frc_x2 < self.half_bit_crit)
+        index_y = np.argwhere(self.frc_y < self.half_bit_crit)
+
+        res = self.get_res(index, qm)
+        res_x1 = self.get_res(index_x1, qm)
+        res_x2 = self.get_res(index_x2, qm)
+        res_y = self.get_res(index_y, qm)
+
+        return res, res_x2, res_x1, res_y
 
 
 def tappering_window(array, method='fraction', taper_value=0.3):
