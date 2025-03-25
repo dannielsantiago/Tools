@@ -1742,5 +1742,106 @@ def calcuate_avg_step_size(points):
     distances = calculate_distances(points)
     return np.mean(distances), np.std(distances)
 
+
+class myPtychoSetup:
+    def __init__(self, wavelength, z0, dq, N, theta=0):
+        self.wavelength= wavelength
+        self.z0=z0
+        self.dq=dq
+        self.N=N
+        self.theta=theta
+        self.dx = wavelength*z0/(N*dq)
+        self.Lq = N*dq
+        self.k0 = 2*np.pi/wavelength
+        self.NAd = (N*dq/2)/z0
+
+    def get_DoF(self):
+        """expected Depth of field"""
+        # DoF = self.wavelength / self.NAd ** 2
+        DoF = 5.2 * self.dx**2 / self.wavelength
+
+        return DoF
+
+    def get_z_tolerance(self, r):
+        """
+        min distance that shifts the r-position a single pixel shift
+        :param r: farthest eucledian distance from origin
+        :return:
+        """
+        dz = (self.wavelength * self.z0 ** 2) / (r * self.Lq - self.wavelength * self.z0)
+        return dz
+
+    def get_theta_tolerance(self, theta):
+        """
+        computes the change in theta that will cause the outhermost detected frequency
+        to shift one single frequency spacing delta_Fq in the target regular frequency spacing grid
+        :return: \delta_theta
+        """
+        theta = np.deg2rad(theta)
+        x = np.arange(-self.N/2, self.N/2) * self.dq
+        z = np.zeros_like(x) + self.z0
+        r = np.sqrt(x ** 2 + z ** 2)
+        Fq_x = self.k0 * x / r
+        Fq_uniform_x = np.linspace(np.amin(Fq_x), np.amax(Fq_x), self.N)
+        delta_Fq = Fq_uniform_x[-1] - Fq_uniform_x[-2]
+
+        # derivative of X_t = (L/2) cos(theta) + z sin(theta)  #this is the rotation transformation
+        # d/dtheta [X_t/r] = dX_t_dtheta / r, since r is constant
+        dX_t_dtheta = - (self.Lq / 2) * np.sin(theta) + self.z0 * np.cos(theta)
+        # d_term = dX_t_dtheta / r
+        d_term = dX_t_dtheta / self.z0
+        dQ_dtheta = self.k0 * (d_term - np.cos(theta))
+        # Predicted delta_theta (radians) such that Q_xt shifts by Delta_qu:
+        delta_theta_pred = delta_Fq / np.abs(dQ_dtheta)
+        return np.rad2deg(delta_theta_pred)
+
+
+    def get_beta_tolerance(self, r):
+        """
+        Computes the min beta angle that the sample's plane can be missmatched
+        to avoid a pixe-shif coordinates
+        :param r:
+        :return:
+        """
+        beta = np.arctan(np.sqrt(2*self.dx/r))
+        return np.rad2deg(beta)
+
+    def evaluate_beta_alpha_tol(self, x, beta, alpha=0, y=0, theta=0):
+        """
+        evaluates if the given alpha, beta result in a pixel shif modification of
+        the input coordinate
+        :param x: max x_pos in meters
+        :param beta: tilt angle in degrees around y-axis
+        :param alpha: tilt angle in degrees around x-axis
+        :param y: max y_pos in meters
+        :return: True, if condition is met, meaning remapping of positions is needed
+        """
+        r = np.sqrt(x**2 + y**2)
+        condition= 2*r*self.dx
+        if theta==0: #perpendicular probe incidence
+            lhs = x**2*np.tan(np.deg2rad(beta))**2 + y**2*np.tan(np.deg2rad(alpha))**2
+        else:
+            dz = self.get_dz_eff(x,y,beta,alpha,theta)
+            lhs = ((x+ dz*np.tan(np.deg2rad(theta)))/np.cos(np.deg2rad(beta)))**2 - x**2 + y**2*np.tan(np.deg2rad(alpha))**2
+        return lhs >= condition, lhs/condition
+
+    def get_dz_eff(self, x,beta,y=0,alpha=0,theta=0):
+        """
+        evaluates the dz-distance offset needed to compensate the propagation of the probe
+        due to tilted surface geometry
+        :param x: pos in meters
+        :param beta: tilt angle around y (meters)
+        :param y: pos in meters
+        :param alpha: tilt angle around x (meters)
+        :param theta: incidence angle probe (degrees)
+        :return:
+        """
+        num = -x*np.tan(np.deg2rad(beta))-y*np.tan(np.deg2rad(alpha))
+        den = 1 + np.tan(np.deg2rad(theta))*np.tan(np.deg2rad(beta))
+
+        return num/den
+
+
+
 if __name__ == "__main__":
     pass

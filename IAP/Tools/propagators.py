@@ -297,7 +297,7 @@ def propagate(u, method='fourier', **kwargs):
     params = PropagationParams(**kwargs)
 
     if method == 'fourier':
-        u_new = fft2c(u) if dz > 0 else ifft2c(u)
+        u_new = fft2c(u) if params.dz > 0 else ifft2c(u)
 
     elif method == 'aspw':
         wavelength = params.wavelength
@@ -634,8 +634,8 @@ def propagate(u, method='fourier', **kwargs):
         Q1 = np.exp(1.j * (k / 2) * ((1 - m) / dz) * r1sq)
         Q2 = np.exp(1.j * (np.pi ** 2) * (2 * (-dz) / (m * k)) * fsq)
 
-        if bandlimit:
-            if m is not 1:
+        if params.bandlimit:
+            if m != 1:
                 r1sq_max = wavelength * dz / (2 * dx * (1 - m))
                 Wr = np.array(circ(X, Y, 2 * r1sq_max))
                 Q1 = Q1 * Wr
