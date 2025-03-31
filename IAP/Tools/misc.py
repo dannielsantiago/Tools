@@ -12,6 +12,10 @@ import scipy.ndimage as ndi
 from matplotlib.colors import LinearSegmentedColormap
 from scipy.ndimage import center_of_mass
 import multiprocessing
+from skimage.restoration import unwrap_phase as scikit_unwrap
+import pyunwrap
+from unwrap import unwrap2D
+
 def setCustomColorMap():
     """
     create the colormap for diffraction data (the same as matlab)
@@ -1840,6 +1844,55 @@ class myPtychoSetup:
         den = 1 + np.tan(np.deg2rad(theta))*np.tan(np.deg2rad(beta))
 
         return num/den
+
+
+def unwrap_phase(wrapped_phase, method):
+    """
+    Unwrap a 2D wrapped phase array using the specified method.
+
+    Parameters
+    ----------
+    wrapped_phase : numpy.ndarray
+        A 2D array containing the wrapped phase data.
+    method : str
+        The unwrapping method to use. Supported methods are:
+            - 'scipy' or 'scikit': Uses scikit-image's unwrap_phase.
+            - 'pyunwrap': Uses the pyunwrap library (new API; generates a dummy quality array).
+            - 'unwrap2d': Uses the unwrap2D library.
+
+    Returns
+    -------
+    numpy.ndarray
+        The unwrapped phase data as a 2D array.
+
+    Raises
+    ------
+    ValueError
+        If an unsupported method is provided.
+    """
+    method_lower = method.lower()
+
+    if method_lower in ['scipy', 'scikit']:
+        # Use scikit-image's unwrap_phase function
+        return scikit_unwrap(wrapped_phase)
+
+    elif method_lower == 'pyunwrap':
+        # For pyunwrap, create a dummy quality array (all ones) with float32 type.
+        quality = np.ones_like(wrapped_phase, dtype=np.float32)
+        return pyunwrap.unwrap2D(wrapped_phase, quality, miguel=False)
+
+    elif method_lower == 'unwrap2d':
+        # For unwrap2D, create a mask array and an output array for the unwrapped phase.
+        mask = np.ones_like(wrapped_phase, dtype=np.float32)
+        unwrapped = np.ones_like(wrapped_phase)
+        unwrap2D.unwrap2D(wrapped_phase, unwrapped_array=unwrapped, mask=mask,
+                          wrap_around_x=False, wrap_around_y=False)
+        return unwrapped
+
+    else:
+        raise ValueError(
+            "Unsupported unwrap method. Supported methods are: 'scipy'/'scikit', 'pyunwrap', 'unwrap2d'."
+        )
 
 
 

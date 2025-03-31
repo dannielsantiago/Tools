@@ -115,10 +115,11 @@ def create_gif(data, scale='log', colormap=None, fps=1, output_filename='output.
     # Set up the writer for output GIF
     writer = imageio.get_writer(output_filename, mode='I', format='GIF', loop=0, fps=fps)
 
-    data = np.log10(data+1) if scale == 'log' else data
 
-    # Normalize the data to fit within the colormap's range
-    data = (data - data.min()) / (data.max() - data.min())
+    data = np.log10(data+1) if scale == 'log' else data
+    if not np.iscomplexobj(data):
+        # Normalize the data to fit within the colormap's range
+        data = (data - data.min()) / (data.max() - data.min())
 
     if colormap is None:
         cmap = setCustomColorMap()
@@ -128,42 +129,20 @@ def create_gif(data, scale='log', colormap=None, fps=1, output_filename='output.
 
     # Apply the colormap to each frame and write to the GIF
     for frame in data:
-        # Apply colormap
-        colored_frame = cmap(frame)  # This returns RGBA values
-        # Convert RGBA to 8-bit RGB suitable for imageio
-        colored_image = (255 * colored_frame).astype(np.uint8)
-        # Write frame
-        writer.append_data(colored_image[:, :, :3],)  # Exclude alpha channel
+        if np.iscomplexobj(frame):
+            colored_image = complex2rgb(frame)
+            writer.append_data(colored_image[:, :, :3], )
+        else:
+            # Apply colormap
+            colored_frame = cmap(frame)  # This returns RGBA values
+            # Convert RGBA to 8-bit RGB suitable for imageio
+            colored_image = (255 * colored_frame).astype(np.uint8)
+            # Write frame
+            writer.append_data(colored_image[:, :, :3],)  # Exclude alpha channel
 
     # Close the writer to finish the GIF
     writer.close()
     print(f"GIF created successfully: {output_filename}")
-
-
-
-def apply_custom_colormap(image, colormap):
-    """
-    Apply a colormap to the image.
-    - If `colormap` is a callable function (e.g., from `matplotlib`), apply it.
-    - If `colormap` is a string, fall back to OpenCV's built-in colormaps.
-    """
-    if True:  # Custom colormap from matplotlib or user-defined
-        colorized = colormap(image)
-        # image = np.uint8(255 * image)  # Normalize to 0-255
-        colorized = np.uint8(colorized[:, :, :3] * 255)  # Convert to uint8 (RGB)
-    else:  # Use OpenCV colormap
-        colormap_dict = {
-            'jet': cv2.COLORMAP_JET,
-            'viridis': cv2.COLORMAP_VIRIDIS,
-            'hot': cv2.COLORMAP_HOT,
-            'gray': cv2.COLORMAP_BONE,
-            'default': cv2.COLORMAP_JET
-        }
-        color_map = colormap_dict.get(colormap, cv2.COLORMAP_JET)
-        image = np.uint8(255 * image)  # Normalize to 0-255
-        colorized = cv2.applyColorMap(image, color_map)
-
-    return colorized
 
 
 def create_video(data, scale='log', colormap=None, fps=1, output_filename='video.mp4'):
