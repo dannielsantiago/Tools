@@ -37,6 +37,24 @@ def setCustomColorMap():
     cm = LinearSegmentedColormap.from_list("cmap", colors, n)
     return cm
 
+
+def setCustomColorMap2(wl):
+    """
+    create the colormap for diffraction data (the same as matlab)
+    return: customized matplotlib colormap
+    """
+    rgb = wavelength_to_rgb(wl)
+    R = rgb[0]/255
+    G = rgb[1]/255
+    B = rgb[2]/255
+    colors = [
+        (0.0, 0.0, 0.0),
+        (R, G, B),
+    ]
+    n = 255  # Discretizes the interpolation into n bins
+    cm = LinearSegmentedColormap.from_list("cmap", colors, n)
+    return cm
+
 CMAP_DIFFRACTION = setCustomColorMap()
 
 # plt.rcParams['text.usetex'] = True
