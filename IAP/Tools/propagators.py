@@ -25,6 +25,7 @@ class PropagationParams:
     pad_factor_y: int = 2 #default padding factor for sas propagator
     s_angle: float = 0  # incidence angle for reflection propagation using RS_integral, ReflectionASPW, eulerdecomposition
     d_angle: float = 0  # incidence angle for reflection propagation using RS_integral, ReflectionASPW, eulerdecomposition
+    backward_step_ok: bool = False  #whether or not to use the negative mid-plane in fresnel two step propagator
 
 
 def zero_pad(arr, pad_factor_x=2, pad_factor_y=2):
@@ -658,7 +659,79 @@ def propagate(u, method='fourier', **kwargs):
         else:
             # u_new = np.conj(Q1) * ifft2c(np.conj(Q2) * fft2c(u))
             u_new = np.conj(Q1) * ifft2c(np.conj(Q2) * fft2c(u * np.conj(Q3)))
-    
+
+    elif method == 'twoStepFresnel':
+        # unpack parameters
+        wavelength = params.wavelength
+        dx = params.dx
+        dq_out = params.dq  # user’s desired final pixel size
+        dz = params.dz
+        m = dq_out / dx
+
+        # choose split: "+" ⇒ both dz_a,dz2>0; "-" ⇒ one leg back‐prop
+        if getattr(params, 'backward_step_ok', False):
+            dz_a = dz / (1 - m)
+        else:
+            dz_a = dz / (1 + m)
+        dz2 = dz - dz_a
+
+        # wavenumber
+        k = 2 * np.pi / wavelength
+
+        # grid setup
+        N = u.shape[-1]
+        L = N * dx
+        lin = np.linspace(-N / 2, N / 2, N, endpoint=False).reshape(1, N)
+        X = lin * dx
+        Y = X.T
+
+        # intermediate‐plane spacing & coords
+        dx_a = wavelength * dz_a / L
+        X_a = lin * dx_a
+        Y_a = X_a.T
+
+        # final‐plane coords (for Q4)
+        dq1 = wavelength * dz2 / (N * dx_a)  # actual output spacing
+        Qx = lin * dq1
+        Qy = Qx.T
+
+        # quadratic phase factors
+        Q1 = np.exp(1j * k / (2 * dz_a) * (X ** 2 + Y ** 2))
+        Q23 = np.exp(1j * k * (1 + m) / (2 * dz2) * (X_a ** 2 + Y_a ** 2))
+        Q4 = np.exp(1j * k / (2 * dz2) * (Qx ** 2 + Qy ** 2))
+
+        # band‐limit each chirp if requested
+        if getattr(params, 'bandlimit', False):
+            # 1) source‐plane mask on Q1
+            r1 = wavelength * abs(dz_a) / (2 * dx)
+            Q1 *= circ(X, Y, 2 * r1)
+
+            # 2) intermediate‐plane mask on Q23
+            # denom = |1 ∓ m| depending on split
+            denom = abs(1 - m) if getattr(params, 'backward_step_ok', False) else (1 + m)
+            r2 = wavelength * abs(dz2) / (2 * dx_a * denom)
+            Q23 *= circ(X_a, Y_a, 2 * r2)
+
+            # 3) final‐plane mask on Q4
+            r3 = wavelength * abs(dz2) / (2 * dq1)
+            Q4 *= circ(Qx, Qy, 2 * r3)
+
+        # prefactors
+        A1 = 1 / (1j * wavelength * dz_a)
+        A2 = 1 / (1j * wavelength * dz2)
+
+        # propagation
+        if dz2 > 0:
+            # two forward Fresnel hops
+            u1 = fft2c(u * Q1)
+            u2 = fft2c(A1 * Q23 * u1)
+            u_new = A2 * Q4 * u2
+        else:
+            # second hop is a back-propagation
+            u1 = fft2c(u * Q1)
+            u2 = ifft2c(np.conj(Q23) * u1)
+            u_new = np.conj(Q4) * ifft2c(A1 * u2)
+
     elif method == 'reflectionASPW':
         """
         1. First do a coordinate transformtation with sourceAngle
