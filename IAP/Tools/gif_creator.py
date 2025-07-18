@@ -70,7 +70,7 @@ def hsv2rgb(hsv: np.ndarray) -> np.ndarray:
     rgb[..., 2] = np.select(conditions, [v, p, t, v, v, q], default=p)
     return rgb.astype('uint8')
 
-def complex2rgb(u, amplitudeScalingFactor=1, scalling=1):
+def complex2rgb(u, amplitudeScalingFactor=1, scaling=1):
     """
     Preparation function for a complex plot, converting a 2D complex array into an rgb array
     :param u: a 2D complex array
@@ -86,12 +86,12 @@ def complex2rgb(u, amplitudeScalingFactor=1, scalling=1):
     v = np.abs(u)
     if amplitudeScalingFactor != 1:
         v[v > amplitudeScalingFactor * np.max(v)] = amplitudeScalingFactor * np.max(v)
-    if scalling != 1:
+    if scaling != 1:
         local_max = np.max(v)
         v = v / (np.max(v) + np.finfo(float).eps) * (2 ** 8 - 1)
-        print(f'ratio: {local_max / scalling}, max(v): {np.max(v)}')
+        print(f'ratio: {local_max / scaling}, max(v): {np.max(v)}')
 
-        v *= local_max / scalling
+        v *= local_max / scaling
         print(f'max(v): {np.max(v)}')
 
     else:
@@ -112,9 +112,6 @@ def create_gif(data, scale='log', colormap=None, fps=1, output_filename='output.
         duration (float): Duration each frame is displayed in the GIF in seconds.
         output_filename (str): Filename for the output GIF.
     """
-    # Set up the writer for output GIF
-    writer = imageio.get_writer(output_filename, mode='I', format='GIF', loop=0, fps=fps)
-
 
     data = np.log10(data+1) if scale == 'log' else data
     if not np.iscomplexobj(data):
@@ -127,20 +124,22 @@ def create_gif(data, scale='log', colormap=None, fps=1, output_filename='output.
         # Get the colormap
         cmap = plt.get_cmap(colormap)
 
-    # Apply the colormap to each frame and write to the GIF
-    for frame in data:
-        if np.iscomplexobj(frame):
-            colored_image = complex2rgb(frame)
-            writer.append_data(colored_image[:, :, :3], )
-        else:
-            # Apply colormap
-            colored_frame = cmap(frame)  # This returns RGBA values
-            # Convert RGBA to 8-bit RGB suitable for imageio
-            colored_image = (255 * colored_frame).astype(np.uint8)
-            # Write frame
-            writer.append_data(colored_image[:, :, :3],)  # Exclude alpha channel
+    # Set up the writer for output GIF
+    with imageio.get_writer(output_filename, mode='I', format='GIF', loop=0, fps=fps) as writer:
+        # Apply the colormap to each frame and write to the GIF
+        for f, frame in enumerate(data):
+            if np.iscomplexobj(frame):
+                colored_image = complex2rgb(frame)
+                writer.append_data(colored_image[:, :, :3], )
+            else:
+                # Apply colormap
+                colored_frame = cmap(frame)  # This returns RGBA values
+                # Convert RGBA to 8-bit RGB suitable for imageio
+                colored_image = (255 * colored_frame).astype(np.uint8)
+                # Write frame
+                writer.append_data(colored_image[:, :, :3],)  # Exclude alpha channel
 
-    # Close the writer to finish the GIF
+        # Close the writer to finish the GIF
     writer.close()
     print(f"GIF created successfully: {output_filename}")
 

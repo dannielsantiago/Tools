@@ -282,7 +282,7 @@ def hsv2rgb(hsv: np.ndarray) -> np.ndarray:
     return rgb.astype('uint8')
 
 
-def complex2rgb(u, amplitudeScalingFactor=1, scalling=1):
+def complex2rgb(u, amplitudeScalingFactor=1, scaling=1):
     """
     Preparation function for a complex plot, converting a 2D complex array into an rgb array
     :param u: a 2D complex array
@@ -298,12 +298,12 @@ def complex2rgb(u, amplitudeScalingFactor=1, scalling=1):
     v = np.abs(u)
     if amplitudeScalingFactor != 1:
         v[v > amplitudeScalingFactor * np.max(v)] = amplitudeScalingFactor * np.max(v)
-    if scalling != 1:
+    if scaling != 1:
         local_max = np.max(v)
         v = v / (np.max(v) + np.finfo(float).eps) * (2 ** 8 - 1)
-        print(f'ratio: {local_max / scalling}, max(v): {np.max(v)}')
+        print(f'ratio: {local_max / scaling}, max(v): {np.max(v)}')
 
-        v *= local_max / scalling
+        v *= local_max * scaling
         print(f'max(v): {np.max(v)}')
 
     else:
