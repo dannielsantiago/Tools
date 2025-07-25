@@ -12,6 +12,8 @@ import scipy.ndimage as ndi
 from matplotlib.colors import LinearSegmentedColormap
 from scipy.ndimage import center_of_mass
 import multiprocessing
+from scipy.signal.windows import tukey
+
 
 
 def setCustomColorMap():
@@ -1254,7 +1256,7 @@ class MyFRC:
         if id == 1:
             self.object2p = self.results_phase_ramp[id][result]
 
-    def align_objects(self):
+    def align_objects_(self):
         N = self.object1p.shape[-1] // 2
         W = int(N * 1)
         region = np.zeros_like(self.object1p)
@@ -1294,6 +1296,108 @@ class MyFRC:
                 self.object2p = temp
             else:
                 self.object2p = temp2
+
+    def align_objects(self):
+        verbose=True
+
+        def error_metric(image1, image2):
+            return np.sum(np.abs(image1 - image2) ** 2) / np.sum(np.abs(image2) ** 2)
+
+        def apply_shift(obj, shift_vec):
+            return shift(np.real(obj), shift_vec, order=5) + 1j * shift(np.imag(obj), shift_vec, order=5)
+
+        def compute_residual_shift(a, b):
+            return register_translation(np.abs(a), np.abs(b), upsample_factor=100)[0]
+
+        # Initial shifts
+        shift_amp = register_translation(np.abs(self.object1p), np.abs(self.object2p), upsample_factor=100)[0]
+        shift_phs = register_translation(np.angle(self.object1p), np.angle(self.object2p), upsample_factor=100)[0]
+
+        if verbose:
+            print(f"Initial shift (amplitude): {shift_amp}")
+            print(f"Initial shift (phase):     {shift_phs}")
+
+        # Apply shifts
+        object2_shifted_amp = apply_shift(self.object2p, shift_amp)
+        object2_shifted_phs = apply_shift(self.object2p, shift_phs)
+
+        # Evaluate residual misalignment
+        resid_shift_amp = compute_residual_shift(self.object1p, object2_shifted_amp)
+        resid_shift_phs = compute_residual_shift(self.object1p, object2_shifted_phs)
+
+        if verbose:
+            print(f"Residual shift after amp alignment: {resid_shift_amp}")
+            print(f"Residual shift after phs alignment: {resid_shift_phs}")
+
+        # Compute norms of shifts
+        norm_init_amp = np.linalg.norm(shift_amp)
+        norm_resid_amp = np.linalg.norm(resid_shift_amp)
+
+        norm_init_phs = np.linalg.norm(shift_phs)
+        norm_resid_phs = np.linalg.norm(resid_shift_phs)
+
+        # Choose the best shift strategy
+        if norm_resid_phs < norm_init_phs and norm_resid_phs < norm_resid_amp:
+            if verbose:
+                print("Using phase-based shift.")
+            self.object2p = object2_shifted_phs
+            return False
+        elif norm_resid_amp < norm_init_amp and norm_resid_amp < norm_resid_phs:
+            if verbose:
+                print("Using amplitude-based shift.")
+            self.object2p = object2_shifted_amp
+            return False
+        else:
+            if verbose:
+                print("Both shifts made it worse — returning unshifted.")
+            return True
+
+    def align_objects_error(self):
+        verbose = True
+
+        def error_metric(image1, image2):
+            return np.sum(np.abs(image1 - image2) ** 2) / np.sum(np.abs(image2) ** 2)
+
+        def apply_shift(obj, shift_vec):
+            return shift(np.real(obj), shift_vec, order=5) + 1j * shift(np.imag(obj), shift_vec, order=5)
+
+        # Compute shifts based on amplitude and phase
+        shift_amp = register_translation(np.abs(self.object1p), np.abs(self.object2p), upsample_factor=100)[0]
+        shift_phs = register_translation(np.angle(self.object1p), np.angle(self.object2p), upsample_factor=100)[0]
+
+        if verbose:
+            print(f"Initial shift (amplitude): {shift_amp}")
+            print(f"Initial shift (phase):     {shift_phs}")
+
+        # Apply shifts
+        object2_shifted_amp = apply_shift(self.object2p, shift_amp)
+        object2_shifted_phs = apply_shift(self.object2p, shift_phs)
+
+        # Compute error metrics
+        err_unshifted = error_metric(self.object1p, self.object2p)
+        err_amp_shift = error_metric(self.object1p, object2_shifted_amp)
+        err_phs_shift = error_metric(self.object1p, object2_shifted_phs)
+
+        if verbose:
+            print(f"Error (unshifted):         {err_unshifted:.3e}")
+            print(f"Error (amplitude shift):   {err_amp_shift:.3e}")
+            print(f"Error (phase shift):       {err_phs_shift:.3e}")
+
+        # Choose the alignment with the lowest error
+        if err_amp_shift < err_phs_shift and err_amp_shift < err_unshifted:
+            if verbose:
+                print("Using amplitude-based shift.")
+            self.object2p = object2_shifted_amp
+            return False
+        elif err_phs_shift < err_amp_shift and err_phs_shift < err_unshifted:
+            if verbose:
+                print("Using phase-based shift.")
+            self.object2p = object2_shifted_phs
+            return False
+        else:
+            if verbose:
+                print("Both shifts increased error — keeping unshifted.")
+            return True
 
         # self.object2p = temp
 
@@ -1340,18 +1444,19 @@ class MyFRC:
         axes[1].set_axis_off()
         fig.tight_layout()
         fig.show()
-    def compute_custom_frc(self, slit_mask, fft_image1, fft_image2):
-        if np.sum(slit_mask) == 0:
+
+    def compute_custom_frc(self, mask, fft_image1, fft_image2):
+        if np.sum(mask) == 0:
             return  0
         else:
-            num = np.sum(np.conj(fft_image1[slit_mask]) * fft_image2[slit_mask])
+            num = np.sum(np.conj(fft_image1[mask]) * fft_image2[mask])
             den = np.sqrt(
-                np.sum(np.abs(fft_image1[slit_mask]) ** 2) *
-                np.sum(np.abs(fft_image2[slit_mask]) ** 2)
+                np.sum(np.abs(fft_image1[mask]) ** 2) *
+                np.sum(np.abs(fft_image2[mask]) ** 2)
             )
             return num / den if den != 0 else 0
 
-    def calculateFRC(self):
+    def calculateFRC_bk(self):
         y_shape = self.object_1c.shape[0]
         x_shape = self.object_1c.shape[1]
         R = self.object_1c.shape[0] / 2
@@ -1370,20 +1475,55 @@ class MyFRC:
         
         fft_image1 = fftshift(fft2(fftshift(self.object_1c * window_func)))
         fft_image2 = fftshift(fft2(fftshift(self.object_2c * window_func)))
-        fft_image1 /= np.max(np.abs(fft_image1))
-        fft_image2 /= np.max(np.abs(fft_image2))
+        # fft_image1 /= np.max(np.abs(fft_image1))
+        # fft_image2 /= np.max(np.abs(fft_image2))
+
+        # Apply same normalization BEFORE using fft_image1 and fft_image2
+        norm_factor = np.max(np.abs(fft_image2))  # or pick a consistent scale
+        fft_image1 /= norm_factor
+        fft_image2 /= norm_factor
+
         conj_image1 = np.conj(fft_image1)
+
+
+        self.prtf = np.zeros(int(np.min([x_shape, y_shape]) / 2), dtype=float)  # new array for PRTF
+        self.prtf_x1 = np.zeros_like(self.prtf)
+        self.prtf_x2 = np.zeros_like(self.prtf)
+        self.prtf_y = np.zeros_like(self.prtf)
+
+        for r in range(int(R)):
+            r += 1
+            ring = ringfunc(r, x_shape, y_shape)
+            ring_mask = ring.astype(bool)
+            N = np.sum(ring_mask)
+
+            # Compute radial average of |FFT_recon| and |FFT_measured|
+            amp_recon = np.abs(fft_image1[ring_mask])
+            amp_meas = np.abs(fft_image2[ring_mask])
+
+            # Add small epsilon to avoid division by zero
+            epsilon = 1e-10
+            ratio = amp_recon / (amp_meas + epsilon)
+
+            self.prtf[r - 1] = np.mean(ratio)
+
+        self.prtf = 1/self.prtf
+
 
         self.frc = np.zeros(int(np.min([x_shape, y_shape]) / 2), dtype=complex)
         self.frc_y = np.zeros_like(self.frc)
         self.frc_x1 = np.zeros_like(self.frc)
         self.frc_x2 = np.zeros_like(self.frc)
+        self.radial_ft1 = np.zeros_like(self.frc)
+        self.radial_ft2 = np.zeros_like(self.frc)
+
         self.one_bit_crit = np.zeros_like(self.frc)
         self.half_bit_crit = np.zeros_like(self.frc)
     
         for r in range(int(R)):
             r += 1
             ring = ringfunc(r, x_shape, y_shape)
+            ring_mask = ring.astype(bool)
             self.one_bit_crit[r-1] = one_bit_criterion(np.sum(ring))
             self.half_bit_crit[r-1] = half_bit_criterion(np.sum(ring))
             # check complex value/real value
@@ -1391,17 +1531,122 @@ class MyFRC:
 
             # X-axis slit: select pixels with angles near 0 or π.
             # (i.e. Fourier components along the horizontal axis)
-            slit_mask_x1 = ring.astype(bool)  & (np.abs(angle_grid) < tol)
-            slit_mask_x2 = ring.astype(bool)  & (np.abs(np.pi - np.abs(angle_grid)) < tol)
+            slit_mask_x1 = ring_mask  & (np.abs(angle_grid) < tol)
+            slit_mask_x2 = ring_mask  & (np.abs(np.pi - np.abs(angle_grid)) < tol)
             # Y-axis slit: select pixels with angles near π/2 or -π/2.
             # (i.e. Fourier components along the vertical axis)
-            slit_mask_y = ring.astype(bool)  & (
+            slit_mask_y = ring_mask  & (
                     (np.abs(angle_grid - np.pi / 2) < tol) | (np.abs(angle_grid + np.pi / 2) < tol)
             )
             self.frc_x1[r - 1] = self.compute_custom_frc(slit_mask_x1, fft_image1, fft_image2)
             self.frc_x2[r - 1] = self.compute_custom_frc(slit_mask_x2, fft_image1, fft_image2)
             self.frc_y[r - 1] = self.compute_custom_frc(slit_mask_y, fft_image1, fft_image2)
 
+            # 🔍 Add: Radially averaged FT magnitude
+            self.radial_ft1[r - 1] = np.mean(np.abs(fft_image1[ring_mask]))
+            self.radial_ft2[r - 1] = np.mean(np.abs(fft_image2[ring_mask]))
+
+    def compute_custom_prtf(self, mask, fft_recon, fft_meas):
+        if np.sum(mask) == 0:
+            return 0
+        amp_recon = np.abs(fft_recon[mask])
+        amp_meas = np.abs(fft_meas[mask])
+        epsilon = 1e-10
+        ratio = amp_recon / (amp_meas + epsilon)
+        return 1 / np.mean(ratio)
+
+    def calculateFRC(self):
+        y_shape, x_shape = self.object_1c.shape
+        R = y_shape / 2
+
+        # Create coordinate grids
+        center_y, center_x = y_shape // 2, x_shape // 2
+        Y, X = np.indices((y_shape, x_shape))
+        dx = X - center_x
+        dy = Y - center_y
+        r_grid = np.sqrt(dx ** 2 + dy ** 2)
+        angle_grid = np.arctan2(dy, dx)
+        tol = np.deg2rad(30)
+
+        # Hanning window
+        window_func = np.hanning(y_shape).reshape(1, -1) * np.hanning(x_shape).reshape(-1, 1)
+        # alpha = 0.01  # 0: rectangular, 1: Hanning
+        # win_y = tukey(y_shape, alpha).reshape(1, -1)
+        # win_x = tukey(x_shape, alpha).reshape(-1, 1)
+        # window_func = win_x * win_y
+        # window_func = window_func*0.25
+        # window_func = np.clip(window_func,0,1)
+
+        fft_image1 = fftshift(fft2(fftshift(self.object_1c * window_func)))
+        fft_image2 = fftshift(fft2(fftshift(self.object_2c * window_func)))
+        # fft_image1 = fftshift(fft2(fftshift(self.object_1c )))
+        # fft_image2 = fftshift(fft2(fftshift(self.object_2c )))
+        # Shared normalization
+        norm_factor = np.max(np.abs(fft_image2))
+        fft_image1 /= norm_factor
+        fft_image2 /= norm_factor
+        conj_image1 = np.conj(fft_image1)
+
+        n_rings = int(np.min([x_shape, y_shape]) / 2)
+
+        # Allocate arrays
+        self.frc = np.zeros(n_rings, dtype=complex)
+        self.frc_x1 = np.zeros_like(self.frc)
+        self.frc_x2 = np.zeros_like(self.frc)
+        self.frc_y = np.zeros_like(self.frc)
+
+        self.prtf = np.zeros_like(self.frc)
+        self.prtf_x1 = np.zeros_like(self.frc)
+        self.prtf_x2 = np.zeros_like(self.frc)
+        self.prtf_y = np.zeros_like(self.frc)
+
+        self.radial_ft1 = np.zeros_like(self.frc)
+        self.radial_ft2 = np.zeros_like(self.frc)
+
+        self.one_bit_crit = np.zeros_like(self.frc)
+        self.half_bit_crit = np.zeros_like(self.frc)
+
+        for r in range(n_rings):
+            r_index = r + 1
+            ring = ringfunc(r_index, x_shape, y_shape)
+            ring_mask = ring.astype(bool)
+
+            N = np.sum(ring_mask)
+            self.one_bit_crit[r] = one_bit_criterion(N)
+            self.half_bit_crit[r] = half_bit_criterion(N)
+
+            # FRC
+            self.frc[r] = np.sum(ring * conj_image1 * fft_image2) / np.sqrt(
+                np.sum(ring * np.abs(fft_image1) ** 2) * np.sum(ring * np.abs(fft_image2) ** 2)
+            )
+
+            # Radial FT magnitudes
+            self.radial_ft1[r] = np.mean(np.abs(fft_image1[ring_mask]))
+            self.radial_ft2[r] = np.mean(np.abs(fft_image2[ring_mask]))
+
+            # Global PRTF (1/PRTF convention)
+            amp_recon = np.abs(fft_image1[ring_mask])
+            amp_meas = np.abs(fft_image2[ring_mask])
+            epsilon = 1e-10
+            ratio = amp_recon / (amp_meas + epsilon)
+            self.prtf[r] = 1 / np.mean(ratio)
+
+            # Directional masks
+            slit_mask_x1 = ring_mask & (np.abs(angle_grid) < tol)
+            slit_mask_x2 = ring_mask & (np.abs(np.pi - np.abs(angle_grid)) < tol)
+            slit_mask_y = ring_mask & (
+                    (np.abs(angle_grid - np.pi / 2) < tol) | (np.abs(angle_grid + np.pi / 2) < tol)
+            )
+
+            # Directional FRCs
+            self.frc_x1[r] = self.compute_custom_frc(slit_mask_x1, fft_image1, fft_image2)
+            self.frc_x2[r] = self.compute_custom_frc(slit_mask_x2, fft_image1, fft_image2)
+            self.frc_y[r] = self.compute_custom_frc(slit_mask_y, fft_image1, fft_image2)
+
+            # Directional PRTFs (1/PRTF)
+            self.prtf_x1[r] = self.compute_custom_prtf(slit_mask_x1, fft_image1, fft_image2)
+            self.prtf_x2[r] = self.compute_custom_prtf(slit_mask_x2, fft_image1, fft_image2)
+            self.prtf_y[r] = self.compute_custom_prtf(slit_mask_y, fft_image1, fft_image2)
 
 
     def plotFRC(self):
@@ -1412,8 +1657,9 @@ class MyFRC:
         ax.plot(self.frc_x1, label=f'FRC_x1')
         ax.plot(self.frc_x2, label=f'FRC_x2')
         ax.plot(self.frc_y, label=f'FRC_y')
-
         ax.plot(self.half_bit_crit, '--', label='1/2 bit')
+        ax.axhline(0.5, color='gray', linestyle='--', linewidth=1, label='PRTF = 0.5')
+
         self.qmax = 1 / (2 * self.dx * 1e6)
         self.Fx = np.round(np.linspace(0, self.qmax, n_ticks), decimals=3)
         plt.xticks(np.linspace(0, len(self.frc), n_ticks), labels=self.Fx)
@@ -1425,19 +1671,67 @@ class MyFRC:
         fig.tight_layout()
         fig.show()
 
+    def plotPRTF(self):
+        n_ticks = 10
+        fig, ax = plt.subplots(nrows=1, ncols=1, figsize=(4, 3), dpi=150)
+        fig.suptitle('PRTF')
+
+        # Plot global and directional PRTFs
+        ax.plot(self.prtf, label='PRTF')
+        # ax.plot(self.prtf_x1, label='PRTF_x1')
+        # ax.plot(self.prtf_x2, label='PRTF_x2')
+        # ax.plot(self.prtf_y, label='PRTF_y')
+
+        # Add threshold line
+        ax.axhline(0.5, color='gray', linestyle='--', linewidth=1, label='PRTF = 0.5')
+
+        # Set spatial frequency ticks
+        self.qmax = 1 / (2 * self.dx * 1e6)
+        self.Fx = np.round(np.linspace(0, self.qmax, n_ticks), decimals=3)
+        plt.xticks(np.linspace(0, len(self.prtf), n_ticks), labels=self.Fx)
+
+        ax.set_ylabel('PRTF')
+        ax.set_xlabel(r'Spatial freq. ($\mu m^{-1}$)')
+        ax.grid(alpha=0.5)
+        ax.minorticks_on()
+        ax.legend()
+        fig.tight_layout()
+        fig.show()
+
     def get_FRC_plot_data(self):
         return self.frc, self.half_bit_crit, self.dx
 
-    def get_spatial_resolution(self):
-        #half bit criteria
-        qm = np.linspace(0, self.qmax, self.frc.shape[-1])
-        index = np.argwhere(self.frc < self.half_bit_crit)
-        if len(index) > 0:
-            index= index[0]
-            res = 1 / (2 * qm[index])  # (um)
+    def get_spatial_resolution_prtf(self):
+        # Build your spatial frequency axis
+        qm = np.linspace(0, self.qmax, self.prtf.size)
+
+        # Find the first radial-frequency index where PRTF < 0.5
+        below = np.where(self.prtf < 0.5)[0]
+        if below.size > 0:
+            idx = below[0]
         else:
-            res = 1 / (2 * qm[-1])  # (um)
-        print(f'resolution: {res} um')
+            # never falls below 0.5 → use the highest frequency
+            idx = qm.size - 1
+
+        # resolution = 1 / (2 * q)
+        res = 1.0 / (2.0 * qm[idx])
+        print(f'PRTF-based resolution: {res:.3f} µm')
+        return res
+
+    def get_spatial_resolution(self):
+        # Build your spatial frequency axis
+        qm = np.linspace(0, self.qmax, self.frc.size)
+
+        # Find the first index where FRC < half-bit criterion
+        below = np.where(self.frc < self.half_bit_crit)[0]
+        if below.size > 0:
+            idx = below[0]
+        else:
+            # never falls below criterion → use highest freq
+            idx = qm.size - 1
+
+        res = 1.0 / (2.0 * qm[idx])
+        print(f'FRC-based resolution: {res:.3f} µm')
         return res
 
     def get_res(self, index, qm):
