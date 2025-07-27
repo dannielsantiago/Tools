@@ -13,7 +13,9 @@ from matplotlib.colors import LinearSegmentedColormap
 from scipy.ndimage import center_of_mass
 import multiprocessing
 from scipy.signal.windows import tukey
-
+import matplotlib
+from mpl_toolkits.axes_grid1.anchored_artists import AnchoredSizeBar
+import matplotlib.font_manager as fm
 
 
 def setCustomColorMap():
@@ -2246,7 +2248,7 @@ def plot_hist(myarray, title='', x_label='', cmap='RdBu_r', bins=100, savename=N
 
     plt.show()
 
-def plot_with_scalebar(data, dx=1, scalebar_size=10, cmap='RdBu'):
+def plot_with_scalebar(data, dx=1, scalebar_size=10, cmap='RdBu', title='', vmin=None, vmax=None):
 
     if isinstance(cmap, str):
         cmap = matplotlib.cm.get_cmap(cmap)
@@ -2254,8 +2256,8 @@ def plot_with_scalebar(data, dx=1, scalebar_size=10, cmap='RdBu'):
         raise TypeError("`cmap` must be a string colormap name or a Colormap instance.")
 
     fig, ax = plt.subplots()
-    im = ax.imshow(data, cmap=cmap)
-    # ax.set_title('PCA Component 1')
+    im = ax.imshow(data, cmap=cmap, vmin=vmin, vmax=vmax)
+    ax.set_title(title)
     # Add scale bar (e.g., 5 µm corresponds to N pixels)
     bar_length_pixels = int(scalebar_size / dx)  # Convert to pixels
     scalebar = AnchoredSizeBar(ax.transData,
