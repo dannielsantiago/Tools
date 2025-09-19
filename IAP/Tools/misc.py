@@ -814,6 +814,8 @@ def remove_phase_ramp(myObject):
     # find center of mass
     ftobj = fft2c(myObject) * np.conj(fft2c(myObject))
     ftobj = np.real(ftobj)
+    if np.ndim(ftobj)>2:
+        ftobj = np.sum(ftobj, axis=0)
     cy, cx = ndi.center_of_mass(ftobj)
     # re_center using fft or
     object_1_centered1 = ifft2c(re_center_ptychogram(fft2c(myObject), center_coord=np.array([cy, cx])))

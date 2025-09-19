@@ -138,6 +138,7 @@ def create_gif(data, scale='log', colormap=None, fps=1, output_filename='output.
                 colored_image = (255 * colored_frame).astype(np.uint8)
                 # Write frame
                 writer.append_data(colored_image[:, :, :3],)  # Exclude alpha channel
+                # writer.append_data(colored_image[:, :, 2::-1], )  # Exclude alpha channel
 
         # Close the writer to finish the GIF
     writer.close()
@@ -183,9 +184,10 @@ def create_video(data, scale='log', colormap=None, fps=1, output_filename='video
         else:
             # Apply colormap
             colored_frame = cmap(frame)  # This returns RGBA values
-            # colored_frame = cv2.applyColorMap(frame, colormap)
+            # colored_frame = cv2.applyColorMap(frame, cmap)
             colored_image = (255 * colored_frame).astype(np.uint8)
             rgb_frame = colored_image[:, :, :3]
+            # rgb_frame = colored_image[:, :, 2::-1]
             frame = cv2.cvtColor(rgb_frame, cv2.COLOR_RGB2BGR)
 
         frames.append(frame)

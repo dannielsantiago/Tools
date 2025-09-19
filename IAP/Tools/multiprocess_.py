@@ -6,7 +6,6 @@ except:
 
 from scipy.interpolate import griddata
 import os
-from .propagators import propagate
 from multiprocessing import Pool
 
 NUM_CPU_CORES = os.cpu_count()
@@ -140,5 +139,39 @@ def binning_parallel(arr, binFactor):
     return arr.reshape(shape).sum(-1).sum(1)
 
 def propagate_(field, dx, dz, wavelength, method = 'aspw'):
-    u1 = propagate(field, dx=dx, dz=dz, method=method, wavelength=wavelength)
+    dy = dx
+    u = field
+
+    k = 2 * np.pi / wavelength
+    N, M = u.shape[-2], u.shape[-1]  # Shape of spatial grid
+
+    # linspacex = np.linspace(-N / 2, N / 2, N, endpoint=False).reshape(1, N)
+    # Fx = linspacex / (N*dx)
+    # Fy = linspacex.reshape(N, 1) / (N*dy)
+    fx = np.fft.fftshift(np.fft.fftfreq(M, dx))
+    fy = np.fft.fftshift(np.fft.fftfreq(N, dy))
+    Fx, Fy = np.meshgrid(fx, fy, indexing='xy')
+    # Fx = np.fft.fftshift(np.fft.fftfreq(M, dx)).reshape(1, M)
+    # Fy = np.fft.fftshift(np.fft.fftfreq(N, dy)).reshape(N, 1)
+
+    # Correct elliptical bandlimit radius
+    f_max_x = 1 / (2 * dx)
+    f_max_y = 1 / (2 * dy)
+    W = ((Fx / f_max_x) ** 2 + (Fy / f_max_y) ** 2) <= 1  # Elliptical support mask
+    # f_max = 1 / (wavelength * np.sqrt(1 + (2 * dz / max(N*dx, M*dx)) ** 2))
+    # W = circ(Fx, Fy, 2 * f_max)
+    # w accounts for circular symmetry of transfer function and imposes bandlimit to avoid sampling issues
+    w = 1 / wavelength ** 2 - Fx ** 2 - Fy ** 2
+    w[w >= 0] = np.sqrt(w[w >= 0])
+    w[w < 0] = 0
+    # w = np.sqrt(w, dtype=complex)
+    H = np.exp(1.j * 2 * np.pi * dz * w) * W
+
+    U = fft2c(u)
+
+    u1 = ifft2c(U * H)
+
     return np.abs(u1).astype(np.float32)
+
+if __name__ == "__main__":
+    pass

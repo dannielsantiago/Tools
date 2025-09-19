@@ -9,6 +9,8 @@ from scipy.interpolate import RectBivariateSpline
 from scipy import linalg
 from math import pi
 from dataclasses import dataclass
+from .multiprocess_ import parallel_RS_diffraction_gpu, parallel_RS_diffraction_cpu
+import gc
 
 @dataclass
 class PropagationParams:
@@ -27,6 +29,7 @@ class PropagationParams:
     s_angle: float = 0  # incidence angle for reflection propagation using RS_integral, ReflectionASPW, eulerdecomposition
     d_angle: float = 0  # incidence angle for reflection propagation using RS_integral, ReflectionASPW, eulerdecomposition
     backward_step_ok: bool = False  #whether or not to use the negative mid-plane in fresnel two step propagator
+    Nq: int = None  # number of pixels in destination grid for RS_integral
 
 
 def zero_pad(arr, pad_factor_x=2, pad_factor_y=2):
@@ -253,7 +256,7 @@ def _RS_diffraction_integral_gpu(U_source, Xs, Ys, Xq, Yq, Zq, wavelength, dx):
 
     return U_observation
 
-def parallel_RS_diffraction_gpu(U_source, Xs, Ys, Xq, Yq, Zq, wavelength, dx):
+def parallel_RS_diffraction_gpux(U_source, Xs, Ys, Xq, Yq, Zq, wavelength, dx):
     """
     Parallelized Rayleigh-Sommerfeld diffraction integral computation using GPU.
 
@@ -286,6 +289,10 @@ def parallel_RS_diffraction_gpu(U_source, Xs, Ys, Xq, Yq, Zq, wavelength, dx):
     U_observation = cp.asnumpy(U_observation_gpu)
 
     return U_observation
+
+
+
+
 
 def propagate(u, method='fourier', **kwargs):
     '''
@@ -368,6 +375,7 @@ def propagate(u, method='fourier', **kwargs):
         u_new = ifft2c(fft2c(u) * H)
 
     elif method == 'shift_aspw_2':
+        #Working better than shift_aspw1
         wavelength = params.wavelength
         dx = params.dx
         dz = params.dz
@@ -399,8 +407,16 @@ def propagate(u, method='fourier', **kwargs):
         W = (df <= 1 / np.abs(c * Omegax)) & (df <= 1 / (c * np.abs(Omegay)))
 
         H = np.ones_like(Fx, dtype=complex)
-        H *= np.exp(
-            1j * k * dz * np.sqrt((1 - (Fx * wavelength + sx) ** 2 - (Fy * wavelength + sy) ** 2).astype(complex))) * W
+        root = np.sqrt((1 - (Fx * wavelength + sx) ** 2 - (Fy * wavelength + sy) ** 2).astype(complex))  # complex
+        exponent = 1j * k * dz * root  # complex: a + i b
+        a = np.real(exponent)
+        b = np.imag(exponent)
+        # clip the real part to avoid overflow (np.exp blows up around ~709 for float64)
+        a_clipped = np.clip(a, -700.0, 700.0)
+        # stable complex exp = exp(a)*(cos b + i sin b)
+        exp_stable = np.exp(a_clipped) * (np.cos(b) + 1j * np.sin(b))
+        # H *= np.exp(1j * k * dz * root) * W
+        H *= exp_stable * W
         H *= np.exp(1j * 2 * np.pi * dz * (tx * Fx + ty * Fy))
         H = H.astype(complex)
 
@@ -1053,6 +1069,90 @@ def propagate(u, method='fourier', **kwargs):
             URot = rotate_around_x(Fx, Fy, Ud, wavelength, rad, Fx, Fy)[0]
 
         u_new = ifft2c(URot * W)
+
+    elif method == 'RS_integral':
+        wavelength = params.wavelength
+        # define source coordinates
+        N = u.shape[-1]
+        dx = params.dx
+        x_prime = np.arange(-N / 2, N / 2) * dx
+        X, Y = np.meshgrid(x_prime, x_prime)
+
+        # detector coordinates
+        dq = params.dq
+        dz = params.dz
+        Nq = getattr(params, 'Nq', None) or N
+        x = np.arange(-Nq / 2, Nq / 2) * dq
+        Xq, Yq = np.meshgrid(x, x)
+        Zq = np.zeros_like(Xq)
+
+        Zq = Zq + dz
+
+        s_angle = params.s_angle #source angle. (illu angle)
+        d_angle = params.d_angle #detection angle
+        theta_r = np.deg2rad(s_angle - d_angle)
+
+        # Gimbal Rotation matrices
+        R_y = np.array([[np.cos(theta_r), 0, np.sin(theta_r)],
+                        [0, 1, 0],
+                        [-np.sin(theta_r), 0, np.cos(theta_r)]])
+
+        def unpack(coordinates):
+            Za, Ya, Xa = np.split(coordinates, 3, axis=-1)
+            Za = np.squeeze(Za)
+            Ya = np.squeeze(Ya)
+            Xa = np.squeeze(Xa)
+            return Za, Ya, Xa
+
+        ZYXq = np.stack((Zq * 0, Yq, Xq), axis=-1)
+        # rotate detector coordinates
+        ZYXq_tilted = ZYXq @ R_y
+
+        Zq_t, Yq_t, Xq_t = unpack(ZYXq_tilted)
+        # adjust offsets
+        X0 = np.sin(np.deg2rad(s_angle)) * dz
+        Z0 = np.cos(np.deg2rad(s_angle)) * dz
+
+        # center tilted detector
+        Zq_t += Z0
+        Xq_t += X0
+        # adds phase ramp
+        sx = np.sin(np.deg2rad(s_angle))
+        tilted_probe = np.exp(1j * 2 * np.pi / wavelength * (sx * X))
+        u *= tilted_probe
+        # propagate with RS integral to tilted plane
+        memory_error = False
+        if np.ndim(u) > 2:
+            npsm = u.shape[-3]
+            u_new = np.zeros(shape=(npsm, Nq, Nq), dtype=complex)
+            for p in range(npsm):
+                if not memory_error:
+                    try:
+                        u_new[..., p, :, :] = parallel_RS_diffraction_gpu(U_source=u[..., p, :, :], Xs=X, Ys=Y,
+                                                                          Xq=Xq_t, Yq=Yq_t, Zq=Zq_t,
+                                                                          wavelength=wavelength, dx=dx, )
+                    except cp.cuda.memory.OutOfMemoryError as e:
+                        memory_error = True
+                        print('out of memory error occurred:', e)
+                        # Free up GPU memory
+                        cp.get_default_memory_pool().free_all_blocks()
+                        cp.get_default_pinned_memory_pool().free_all_blocks()
+
+                        # Optionally, you can run garbage collection
+                        gc.collect()
+
+                        print('using parallel_RS_diffraction_cpu instead')
+                        u_new[..., p, :, :] = parallel_RS_diffraction_cpu(U_source=u[..., p, :, :], Xs=X, Ys=Y,
+                                                                          Xq=Xq_t, Yq=Yq_t, Zq=Zq_t,
+                                                                          wavelength=wavelength, dx=dx, )
+                else:
+                    u_new[..., p, :, :] = parallel_RS_diffraction_cpu(U_source=u[..., p, :, :], Xs=X, Ys=Y,
+                                                                      Xq=Xq_t, Yq=Yq_t, Zq=Zq_t,
+                                                                      wavelength=wavelength, dx=dx, )
+
+                # ensures same photon_counts after propagation
+                temp_photons = np.sum(np.square(np.abs(u[..., p, :, :])))
+                u_new[..., p, :, :] *= np.sqrt(temp_photons) / np.sqrt(np.sum(np.square(np.abs(u_new[..., p, :, :]))))
 
     return u_new
 
