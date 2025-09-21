@@ -11,7 +11,127 @@ from multiprocessing import Pool
 NUM_CPU_CORES = os.cpu_count()
 print("Number of CPU cores:", NUM_CPU_CORES)
 
+# Globals inside workers
+_G = {}
+
+def _init_worker(U_src, Xs, Ys, wavelength, dx2, k, second_term):
+    _G['U'] = U_src
+    _G['Xs'] = Xs
+    _G['Ys'] = Ys
+    _G['dx2'] = dx2
+    _G['k'] = k
+    _G['second_term'] = second_term
+
+def _worker_observe(pt):
+    x, y, z = pt
+    U = _G['U']; Xs = _G['Xs']; Ys = _G['Ys']
+    k = _G['k']; second_term = _G['second_term']; dx2 = _G['dx2']
+    r = np.sqrt((x - Xs)**2 + (y - Ys)**2 + z**2)
+    phase_term = np.exp(1j * k * r) * (z / r**2)
+    return np.sum(U * phase_term * second_term * dx2)
+
+def parallel_RS_diffraction_cpu(U_source, Xs, Ys, Xq, Yq, Zq, wavelength, dx,
+                                     threshold_dB=None,
+                                     num_processes=int(NUM_CPU_CORES / 4), chunksize=1024):
+    # 1) mask once
+    mag = np.abs(U_source); m = mag > 0
+    if threshold_dB is not None and mag.max() > 0:
+        m = (20*np.log10(m / mag.max()) > threshold_dB)
+    U = U_source[m].ravel(); Xs_m = Xs[m].ravel(); Ys_m = Ys[m].ravel()
+    if U.size == 0:
+        return np.zeros(Xq.shape[-2:], dtype=complex)
+
+    # 2) precompute constants & build observation list (batched by chunksize via map)
+    dx2 = dx*dx
+    k = 2*np.pi / wavelength
+    second_term = (1.0/(2*np.pi)) - (1j/wavelength)
+    obs = list(zip(Xq.ravel(), Yq.ravel(), Zq.ravel()))
+
+    # 3) start pool with initializer (arrays sent ONCE per worker)
+    with Pool(processes=num_processes,
+              initializer=_init_worker,
+              initargs=(U, Xs_m, Ys_m, wavelength, dx2, k, second_term)) as pool:
+        # imap with chunksize batches many points per task
+        out = pool.imap(_worker_observe, obs, chunksize=chunksize)
+        U_flat = np.fromiter(out, dtype=np.complex128, count=len(obs))
+
+    return U_flat.reshape(Xq.shape[-2], Xq.shape[-1])
+
+
+# Helper to build a mask (amplitude-referenced dB)
+def _mask_by_threshold_db(U_source, threshold_dB):
+    """
+    Returns a boolean mask keeping points with 20*log10(|U|/max|U|) > threshold_dB.
+    If threshold_dB is None, returns a mask of all True.
+    """
+    if threshold_dB is None:
+        return np.ones(U_source.shape, dtype=bool)
+    mag = np.abs(U_source)
+    max_mag = np.max(mag)
+    # Guard against completely zero source
+    if max_mag == 0:
+        return np.zeros_like(mag, dtype=bool)
+    rel_db = 20.0 * np.log10(mag / max_mag)
+    return rel_db > threshold_dB
+
 def RS_diffraction_integral_cpu(args):
+    """
+    Compute the Rayleigh-Sommerfeld diffraction integral for one (x,y,z) point.
+    Expected pre-masked U_source, Xs, Ys (1D or flattened arrays).
+    """
+    U_source, Xs, Ys, x, y, z, wavelength, dx = args
+    k = 2 * np.pi / wavelength
+    r = np.sqrt((x - Xs)**2 + (y - Ys)**2 + z**2)
+    # Avoid division warnings for r==0 (shouldn't happen for distinct planes, but safe):
+    # add a tiny epsilon if desired; here assume z>0 so r>0.
+    phase_term = np.exp(1j * k * r) * (z / r**2)
+    second_term = (1.0 / (2 * np.pi)) - (1j / wavelength)
+    U_observation = np.sum(U_source * phase_term * second_term * (dx**2))
+    return U_observation
+
+def parallel_RS_diffraction_cpu_1(
+    U_source, Xs, Ys, Xq, Yq, Zq, wavelength, dx,
+    threshold_dB=None,
+    num_processes=int(NUM_CPU_CORES / 4)
+):
+    """
+    threshold_dB: keep only source points with 20*log10(|U|/max|U|) > threshold_dB.
+                  Use None to disable masking. Typical values: -40, -60, etc.
+    """
+
+    # 1) Build and apply the mask once, before spawning workers
+    mask = _mask_by_threshold_db(U_source, threshold_dB)
+    # Flatten to minimize pickle/copy size
+    U_src_m = U_source[mask].ravel()
+    Xs_m    = Xs[mask].ravel()
+    Ys_m    = Ys[mask].ravel()
+
+    # Optional: early exit if nothing passes the threshold
+    if U_src_m.size == 0:
+        return np.zeros(Xq.shape[-2:], dtype=complex)
+
+    # 2) Prepare observation coordinates
+    observation_coordinates = np.stack(
+        (Xq.flatten(), Yq.flatten(), Zq.flatten()), axis=-1
+    )
+
+    # 3) Build args for each observation point
+    base = (U_src_m, Xs_m, Ys_m, wavelength, dx)
+    args_list = [(base[0], base[1], base[2], x, y, z, base[3], base[4])
+                 for x, y, z in observation_coordinates]
+
+    # 4) Parallel map
+    with Pool(processes=num_processes) as pool:
+        U_observation_flat = pool.map(RS_diffraction_integral_cpu, args_list)
+
+    # 5) Reshape to the field grid shape
+    U_observation = np.array(U_observation_flat, dtype=complex).reshape(
+        Xq.shape[-2], Xq.shape[-1]
+    )
+    return U_observation
+
+
+def RS_diffraction_integral_cpu_bk(args):
     """
     Compute the Rayleigh-Sommerfeld diffraction integral using a vectorized implementation.
 
@@ -35,8 +155,9 @@ def RS_diffraction_integral_cpu(args):
     U_observation = np.sum(U_source * phase_term * second_term * dx**2)
     return U_observation
 
-
-def parallel_RS_diffraction_cpu(U_source, Xs, Ys, Xq, Yq, Zq, wavelength, dx, num_processes=int(NUM_CPU_CORES / 5)):
+def parallel_RS_diffraction_cpu_bk(
+        U_source, Xs, Ys, Xq, Yq, Zq, wavelength, dx,
+        num_processes=int(NUM_CPU_CORES / 4)):
     observation_coordinates = np.stack((Xq.flatten(), Yq.flatten(), Zq.flatten()), axis=-1)
     # observation_coordinates_flat = np.stack([coord.flatten() for coord in observation_coordinates], axis=-1)
 

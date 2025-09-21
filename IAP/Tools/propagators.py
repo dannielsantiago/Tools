@@ -30,7 +30,7 @@ class PropagationParams:
     d_angle: float = 0  # incidence angle for reflection propagation using RS_integral, ReflectionASPW, eulerdecomposition
     backward_step_ok: bool = False  #whether or not to use the negative mid-plane in fresnel two step propagator
     Nq: int = None  # number of pixels in destination grid for RS_integral
-
+    threshold_dB: float = None # threshold in dB to filter out source points for RS_integral cpu implementation
 
 def zero_pad(arr, pad_factor_x=2, pad_factor_y=2):
     '''
@@ -355,24 +355,59 @@ def propagate(u, method='fourier', **kwargs):
         df = 1 / L
         f = np.arange(-N / 2, N / 2) * df
         fx, fy = np.meshgrid(f, f)
-
         # Transfer function
 
         # Calculate w, fu, fv
-        w = np.real(np.sqrt((1 / wavelength ** 2 - fx ** 2 - fy ** 2).astype(complex)))
-        # fu = z * (x0 - fx / (w + np.finfo(float).eps)) + np.finfo(float).eps  # Adding epsilon to avoid division by zero
-        # fv = z * (y0 - fy / (w + np.finfo(float).eps)) + np.finfo(float).eps
-        fu = (x0 - dz * fx / (w + np.finfo(float).eps)) + np.finfo(float).eps  # Adding epsilon to avoid division by zero
-        fv = (y0 - dz * fy / (w + np.finfo(float).eps)) + np.finfo(float).eps
+        w = np.sqrt((1 / wavelength ** 2 - fx ** 2 - fy ** 2) + 0j)  # keep complex
+        fu = (x0 - dz * fx / (w + 0j))  # no eps in the math; handle zeros with where()
+        fv = (y0 - dz * fy / (w + 0j))
+        c=2
+        # mask safely (example)
+        denx = c * np.abs(fu)
+        deny = c * np.abs(fv)
+        Wx = np.where(denx > 0, df <= 1 / denx, False)
+        Wy = np.where(deny > 0, df <= 1 / deny, False)
+        W = Wx & Wy
 
-        c = 2
-        W = (df <= 1 / (c * np.abs(fu))) & (df <= 1 / (c * np.abs(fv)))
+        root = np.sqrt((1 - (fx * wavelength) ** 2 - (fy * wavelength) ** 2) + 0j)
+        exponent = 1j * k * dz * root
+        a = np.real(exponent)
+        b = np.imag(exponent)
+        a_clipped = np.clip(a, -700.0, 700.0)
+        exp_stable = np.exp(a_clipped) * (np.cos(b) + 1j * np.sin(b))
 
-        # Compute H
-        H = np.exp(1j * k * dz * np.sqrt((1 - (fx * wavelength) ** 2 - (fy * wavelength) ** 2).astype(complex)))
-        H *= W * np.exp(1j * 2 * np.pi * (x0 * fx + y0 * fy))
-
+        H = exp_stable * W
+        H *= np.exp(1j * 2 * np.pi * (x0 * fx + y0 * fy))
         u_new = ifft2c(fft2c(u) * H)
+
+        # w = np.sqrt((1 / wavelength ** 2 - fx ** 2 - fy ** 2) + 0j)  # keep complex
+        # #
+        # # # w = np.real(np.sqrt((1 / wavelength ** 2 - fx ** 2 - fy ** 2).astype(complex)))
+        # # # fu = dz * (x0 - fx / (w + np.finfo(float).eps)) + np.finfo(float).eps  # Adding epsilon to avoid division by zero
+        # # # fv = dz * (y0 - fy / (w + np.finfo(float).eps)) + np.finfo(float).eps
+        # fu = (x0 - dz * fx / (w + np.finfo(float).eps)) + np.finfo(float).eps  # Adding epsilon to avoid division by zero
+        # fv = (y0 - dz * fy / (w + np.finfo(float).eps)) + np.finfo(float).eps
+        # #
+        # c = 2
+        # W = (df <= 1 / (c * np.abs(fu))) & (df <= 1 / (c * np.abs(fv)))
+        # # W = (np.abs(fx) <= 1 / (c * np.abs(fu))) & (np.abs(fy) <= 1 / (c * np.abs(fv)))
+        #
+        # #
+        # # # Compute H
+        # H = np.ones_like(fx, dtype=complex)
+        # root = np.sqrt((1 - (fx * wavelength) ** 2 - (fy * wavelength) ** 2).astype(complex))
+        # exponent = 1j * k * dz * root  # complex: a + i b
+        # a = np.real(exponent)
+        # b = np.imag(exponent)
+        # # clip the real part to avoid overflow (np.exp blows up around ~709 for float64)
+        # a_clipped = np.clip(a, -700.0, 700.0)
+        # # # stable complex exp = exp(a)*(cos b + i sin b)
+        # exp_stable = np.exp(a_clipped) * (np.cos(b) + 1j * np.sin(b))
+        # H *= exp_stable * W
+        # #
+        # H *= np.exp(1j * 2 * np.pi * (x0 * fx + y0 * fy))
+        # #
+        # u_new = H#ifft2c(fft2c(u) * H )
 
     elif method == 'shift_aspw_2':
         #Working better than shift_aspw1
@@ -1072,6 +1107,7 @@ def propagate(u, method='fourier', **kwargs):
 
     elif method == 'RS_integral':
         wavelength = params.wavelength
+        threshold_dB = params.threshold_dB
         # define source coordinates
         N = u.shape[-1]
         dx = params.dx
@@ -1119,7 +1155,7 @@ def propagate(u, method='fourier', **kwargs):
         # adds phase ramp
         sx = np.sin(np.deg2rad(s_angle))
         tilted_probe = np.exp(1j * 2 * np.pi / wavelength * (sx * X))
-        u *= tilted_probe
+        u = u * tilted_probe
         # propagate with RS integral to tilted plane
         memory_error = False
         if np.ndim(u) > 2:
@@ -1144,15 +1180,27 @@ def propagate(u, method='fourier', **kwargs):
                         print('using parallel_RS_diffraction_cpu instead')
                         u_new[..., p, :, :] = parallel_RS_diffraction_cpu(U_source=u[..., p, :, :], Xs=X, Ys=Y,
                                                                           Xq=Xq_t, Yq=Yq_t, Zq=Zq_t,
-                                                                          wavelength=wavelength, dx=dx, )
+                                                                          wavelength=wavelength, dx=dx,
+                                                                          threshold_dB=threshold_dB)
                 else:
                     u_new[..., p, :, :] = parallel_RS_diffraction_cpu(U_source=u[..., p, :, :], Xs=X, Ys=Y,
                                                                       Xq=Xq_t, Yq=Yq_t, Zq=Zq_t,
-                                                                      wavelength=wavelength, dx=dx, )
+                                                                      wavelength=wavelength, dx=dx,
+                                                                      threshold_dB=threshold_dB)
 
                 # ensures same photon_counts after propagation
                 temp_photons = np.sum(np.square(np.abs(u[..., p, :, :])))
                 u_new[..., p, :, :] *= np.sqrt(temp_photons) / np.sqrt(np.sum(np.square(np.abs(u_new[..., p, :, :]))))
+        else:
+            u_new = np.zeros(shape=u.shape, dtype=complex)
+            u_new[..., :, :] = parallel_RS_diffraction_cpu(U_source=u[..., :, :], Xs=X, Ys=Y,
+                                                              Xq=Xq_t, Yq=Yq_t, Zq=Zq_t,
+                                                              wavelength=wavelength, dx=dx,
+                                                              threshold_dB=threshold_dB)
+
+        # ensures same photon_counts after propagation
+        temp_photons = np.sum(np.square(np.abs(u[..., :, :])))
+        u_new[..., :, :] *= np.sqrt(temp_photons) / np.sqrt(np.sum(np.square(np.abs(u_new[..., :, :]))))
 
     return u_new
 
