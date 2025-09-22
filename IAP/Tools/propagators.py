@@ -31,6 +31,8 @@ class PropagationParams:
     backward_step_ok: bool = False  #whether or not to use the negative mid-plane in fresnel two step propagator
     Nq: int = None  # number of pixels in destination grid for RS_integral
     threshold_dB: float = None # threshold in dB to filter out source points for RS_integral cpu implementation
+    theta_rot_deg: float = 0 # rotation angle in degrees for in_plane_rotation method
+
 
 def zero_pad(arr, pad_factor_x=2, pad_factor_y=2):
     '''
@@ -1201,7 +1203,122 @@ def propagate(u, method='fourier', **kwargs):
         # ensures same photon_counts after propagation
         temp_photons = np.sum(np.square(np.abs(u[..., :, :])))
         u_new[..., :, :] *= np.sqrt(temp_photons) / np.sqrt(np.sum(np.square(np.abs(u_new[..., :, :]))))
+    
+    elif methid == 'in_plane_rotation':
+        """
+            Propagate complex field u(x,y) from z=0 to a plane rotated by +theta about y,
+            pivoting through the origin. Optionally shift the tilted plane by s_normal
+            along its own normal (positive toward +n').
 
+            Parameters
+            ----------
+            u : array, shape (C, Ny, Nx) or (Ny, Nx)
+                Complex field(s) at z=0.
+            theta_deg : float
+                Rotation angle (degrees). +θ tilts the plane normal toward +x.
+            dx, dy : float
+                Sample spacings [m].
+            wavelength : float
+                Wavelength [m].
+            s_normal : float, optional
+                Displacement of the tilted plane along its own normal [m].
+                s_normal=0 gives the plane that cuts the origin.
+            recenter_carrier : bool, optional
+                If True, remove the carrier so DC stays centered by subtracting sinθ/λ in Fx'.
+
+            Returns
+            -------
+            u_out : array, same shape as u
+                Field on the tilted (and optionally shifted) plane sampled on the same (x,y) grid.
+            """
+        dx = params.dx
+        dy = getattr(params, 'dy', None) or dx  # Allow for anisotropic sampling
+        wavelength = params.wavelength
+        theta_deg = params.theta_rot_deg
+        # shape handling
+        U_in = u
+        if u.ndim == 2:
+            U_in = u[None, ...]
+        C, Ny, Nx = U_in.shape
+
+        # frequency grids (cycles/m)
+        fx = np.fft.fftshift(np.fft.fftfreq(Nx, dx))
+        fy = np.fft.fftshift(np.fft.fftfreq(Ny, dy))
+        FX, FY = np.meshgrid(fx, fy, indexing='xy')
+
+        fmax = 1.0 / wavelength
+        # Forward spectrum
+        U = np.fft.fftshift(np.fft.fft2(np.fft.ifftshift(U_in, axes=(-2, -1)), axes=(-2, -1)), axes=(-2, -1))
+
+        # Source light-cone (propagating)
+        cone_src = (FX ** 2 + FY ** 2) <= fmax ** 2
+        FZ = np.zeros_like(FX)
+        FZ[cone_src] = np.sqrt(fmax ** 2 - (FX[cone_src] ** 2 + FY[cone_src] ** 2))
+
+        # Rotation parameters
+        th = np.deg2rad(theta_deg)
+        c, s = np.cos(th), np.sin(th)
+
+        # ---- Build target (rotated-plane) frequency grid ----
+        FXp = FX.copy()
+        FYp = FY.copy()
+        if recenter_carrier:
+            # shift to keep DC centered on the tilted plane
+            FXp = FXp + 0.0  # start from same grid
+            FXp += 0.0  # clarity only
+            # Note: we incorporate the '−sinθ/λ' by INVERTING the mapping below (preferred)
+        # Target cone and its normal component
+        cone_tgt = (FXp ** 2 + FYp ** 2) <= fmax ** 2
+        FZp = np.zeros_like(FXp)
+        FZp[cone_tgt] = np.sqrt(fmax ** 2 - (FXp[cone_tgt] ** 2 + FYp[cone_tgt] ** 2))
+
+        # ---- Inverse mapping: (Fx',Fy') -> (Fx,Fy) on source plane ----
+        # Rotation of wavevector:
+        # Fx' = Fx*c + Fz*s   ;   Fz' = -Fx*s + Fz*c   ;   Fy' = Fy
+        # => Fx = Fx'*c - Fz'*s   ;   Fy = Fy'   ;   Fz = Fx'*s + Fz'*c
+        FX_src = FXp * c - FZp * s
+        FY_src = FYp
+
+        # Optional “recenter carrier”: subtract sinθ/λ inside the *target* Fx'
+        # which is equivalent to heterodyning exp(+i 2π (sinθ/λ) x) in real space.
+        if recenter_carrier:
+            FX_src += (s / wavelength)  # because we used inverse mapping
+
+        # Compute Fz on the *source* points for the Jacobian
+        cone_src_eval = (FX_src ** 2 + FY_src ** 2) <= fmax ** 2
+        FZ_src = np.zeros_like(FX_src)
+        FZ_src[cone_src_eval] = np.sqrt(fmax ** 2 - (FX_src[cone_src_eval] ** 2 + FY_src[cone_src_eval] ** 2))
+
+        # Jacobian (dΩ conservation) evaluated at source (Fx,Fy)
+        with np.errstate(divide='ignore', invalid='ignore'):
+            J = c - (FX_src / FZ_src) * s
+            J = np.nan_to_num(J)
+
+        # Build index arrays for map_coordinates (y,x order)
+        # Map physical freq -> index in [0..N-1]
+        def to_index(arr, fmin, fmax, N):
+            return (arr - fmin) / (fmax - fmin) * (N - 1)
+
+        fx_min, fx_max = fx.min(), fx.max()
+        fy_min, fy_max = fy.min(), fy.max()
+        x_idx = to_index(FX_src, fx_min, fx_max, Nx)
+        y_idx = to_index(FY_src, fy_min, fy_max, Ny)
+
+        # Interpolate spectrum on rotated grid
+        UR = np.zeros_like(U, dtype=np.complex128)
+        for cidx in range(C):
+            real_vals = map_coordinates(np.real(U[cidx]), [y_idx, x_idx], order=3, mode='constant', cval=0.0)
+            imag_vals = map_coordinates(np.imag(U[cidx]), [y_idx, x_idx], order=3, mode='constant', cval=0.0)
+            UR[cidx] = (real_vals + 1j * imag_vals) * J
+
+        # Apply target cone (evanescent rejection) on the rotated plane
+        UR *= cone_tgt
+
+        # Inverse FFT
+        u_new = np.fft.fftshift(np.fft.ifft2(np.fft.ifftshift(UR, axes=(-2, -1)), axes=(-2, -1)), axes=(-2, -1))
+        if u.ndim == 2:
+            u_new = u_new[0]
+            
     return u_new
 
 
