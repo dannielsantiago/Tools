@@ -6,6 +6,7 @@ import numpy as np
 import cupy as cp
 from scipy.sparse.linalg import svds
 from scipy.interpolate import RectBivariateSpline
+from scipy.ndimage import map_coordinates
 from scipy import linalg
 from math import pi
 from dataclasses import dataclass
@@ -32,7 +33,7 @@ class PropagationParams:
     Nq: int = None  # number of pixels in destination grid for RS_integral
     threshold_dB: float = None # threshold in dB to filter out source points for RS_integral cpu implementation
     theta_rot_deg: float = 0 # rotation angle in degrees for in_plane_rotation method
-
+    recenter_carrier: bool = True # re-centering of carrier frequency after rotation
 
 def zero_pad(arr, pad_factor_x=2, pad_factor_y=2):
     '''
@@ -1204,7 +1205,7 @@ def propagate(u, method='fourier', **kwargs):
         temp_photons = np.sum(np.square(np.abs(u[..., :, :])))
         u_new[..., :, :] *= np.sqrt(temp_photons) / np.sqrt(np.sum(np.square(np.abs(u_new[..., :, :]))))
     
-    elif methid == 'in_plane_rotation':
+    elif method == 'in_plane_rotation':
         """
             Propagate complex field u(x,y) from z=0 to a plane rotated by +theta about y,
             pivoting through the origin. Optionally shift the tilted plane by s_normal
@@ -1235,6 +1236,7 @@ def propagate(u, method='fourier', **kwargs):
         dy = getattr(params, 'dy', None) or dx  # Allow for anisotropic sampling
         wavelength = params.wavelength
         theta_deg = params.theta_rot_deg
+        recenter_carrier = params.recenter_carrier
         # shape handling
         U_in = u
         if u.ndim == 2:
@@ -1248,7 +1250,8 @@ def propagate(u, method='fourier', **kwargs):
 
         fmax = 1.0 / wavelength
         # Forward spectrum
-        U = np.fft.fftshift(np.fft.fft2(np.fft.ifftshift(U_in, axes=(-2, -1)), axes=(-2, -1)), axes=(-2, -1))
+        U = fft2c(U_in)
+        # U = np.fft.fftshift(np.fft.fft2(np.fft.ifftshift(U_in, axes=(-2, -1)), axes=(-2, -1)), axes=(-2, -1))
 
         # Source light-cone (propagating)
         cone_src = (FX ** 2 + FY ** 2) <= fmax ** 2
@@ -1315,7 +1318,8 @@ def propagate(u, method='fourier', **kwargs):
         UR *= cone_tgt
 
         # Inverse FFT
-        u_new = np.fft.fftshift(np.fft.ifft2(np.fft.ifftshift(UR, axes=(-2, -1)), axes=(-2, -1)), axes=(-2, -1))
+        # u_new = np.fft.fftshift(np.fft.ifft2(np.fft.ifftshift(UR, axes=(-2, -1)), axes=(-2, -1)), axes=(-2, -1))
+        u_new = ifft2c(UR)
         if u.ndim == 2:
             u_new = u_new[0]
             
