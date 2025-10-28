@@ -810,6 +810,90 @@ def spiral_blade_mask(wavelength=13.5e-9, f=0.6e-3, N=256, dx=10e-9, n_blades=3,
     return binary
 
 
+def estimate_phase_ramp(obj, fft2c, window=False):
+    """
+    Estimate a linear phase ramp from the far-field centroid.
+
+    Parameters
+    ----------
+    obj : (..., Ny, Nx) complex
+    fft2c : callable
+        Centered 2D FFT (consistent normalization with your pipeline).
+    window : bool
+        If True, apply a separable Hann window before the FFT to reduce edge bias.
+
+    Returns
+    -------
+    dict with keys:
+        alpha, beta : float
+            Phase slopes [rad/pixel] for x and y, respectively.
+        ramp : (Ny, Nx) complex
+            R(y,x) = exp(1j*(alpha*x + beta*y)).
+        center : (cy, cx) floats
+            Far-field intensity centroid in pixel coordinates.
+        center_rel : (dv, du) floats
+            Offsets from array center (i.e., COM minus (Ny-1)/2, (Nx-1)/2).
+    """
+    obj = np.asarray(obj)
+    Ny, Nx = obj.shape[-2], obj.shape[-1]
+    cy0, cx0 = (Ny - 1) / 2.0, (Nx - 1) / 2.0
+
+    O = obj
+    if window:
+        wy = np.hanning(Ny).reshape(Ny, 1)
+        wx = np.hanning(Nx).reshape(1, Nx)
+        O = O * (wy * wx)
+
+    F = fft2c(O)
+    I = np.abs(F)**2  # far-field intensity
+
+    # collapse any leading (batch) dims for the centroid
+    if I.ndim > 2:
+        I_for_com = I.sum(axis=tuple(range(I.ndim - 2)))
+    else:
+        I_for_com = I
+
+    # robust against NaN/Inf and negative values
+    I_for_com = np.nan_to_num(I_for_com, nan=0.0, posinf=0.0, neginf=0.0)
+    I_for_com[I_for_com < 0] = 0.0
+
+    cy, cx = ndi.center_of_mass(I_for_com)
+
+    # frequency-bin offsets relative to array center
+    dv = cy - cy0  # rows (y)
+    du = cx - cx0  # cols (x)
+
+    # convert to per-pixel phase slopes (rad/pixel)
+    alpha = -(2.0 * np.pi / Nx) * du  # x-slope
+    beta  = -(2.0 * np.pi / Ny) * dv  # y-slope
+
+    # build the ramp
+    y = np.arange(Ny, dtype=np.float64)[:, None]
+    x = np.arange(Nx, dtype=np.float64)[None, :]
+    ramp = np.exp(1j * (alpha * x + beta * y)).astype(np.result_type(obj, np.complex64), copy=False)
+
+    return {
+        "alpha": float(alpha),
+        "beta": float(beta),
+        "ramp": ramp,
+        "center": (float(cy), float(cx)),
+        "center_rel": (float(dv), float(du)),
+    }
+
+def remove_phase_ramp(obj, fft2c, window=False, return_all=False):
+    """
+    Cancel the object's linear phase ramp by multiplying with the conjugate ramp.
+
+    Returns
+    -------
+    obj_corr : same shape as obj
+    (optionally) info : dict returned by estimate_phase_ramp when return_all=True
+    """
+    info = estimate_phase_ramp(obj, fft2c, window=window)
+    obj_corr = obj * np.conj(info["ramp"])
+    return (obj_corr, info) if return_all else obj_corr
+
+
 def remove_phase_ramp(myObject):
     # find center of mass
     ftobj = fft2c(myObject) * np.conj(fft2c(myObject))
