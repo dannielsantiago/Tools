@@ -12,10 +12,6 @@ import scipy.ndimage as ndi
 from matplotlib.colors import LinearSegmentedColormap
 from scipy.ndimage import center_of_mass
 import multiprocessing
-from scipy.signal.windows import tukey
-import matplotlib
-from mpl_toolkits.axes_grid1.anchored_artists import AnchoredSizeBar
-import matplotlib.font_manager as fm
 
 
 def setCustomColorMap():
@@ -286,7 +282,7 @@ def hsv2rgb(hsv: np.ndarray) -> np.ndarray:
     return rgb.astype('uint8')
 
 
-def complex2rgb(u, amplitudeScalingFactor=1, scaling=1):
+def complex2rgb(u, amplitudeScalingFactor=1, scalling=1):
     """
     Preparation function for a complex plot, converting a 2D complex array into an rgb array
     :param u: a 2D complex array
@@ -302,12 +298,12 @@ def complex2rgb(u, amplitudeScalingFactor=1, scaling=1):
     v = np.abs(u)
     if amplitudeScalingFactor != 1:
         v[v > amplitudeScalingFactor * np.max(v)] = amplitudeScalingFactor * np.max(v)
-    if scaling != 1:
+    if scalling != 1:
         local_max = np.max(v)
         v = v / (np.max(v) + np.finfo(float).eps) * (2 ** 8 - 1)
-        print(f'ratio: {local_max / scaling}, max(v): {np.max(v)}')
+        print(f'ratio: {local_max / scalling}, max(v): {np.max(v)}')
 
-        v *= local_max * scaling
+        v *= local_max / scalling
         print(f'max(v): {np.max(v)}')
 
     else:
@@ -810,96 +806,10 @@ def spiral_blade_mask(wavelength=13.5e-9, f=0.6e-3, N=256, dx=10e-9, n_blades=3,
     return binary
 
 
-def estimate_phase_ramp(obj, fft2c, window=False):
-    """
-    Estimate a linear phase ramp from the far-field centroid.
-
-    Parameters
-    ----------
-    obj : (..., Ny, Nx) complex
-    fft2c : callable
-        Centered 2D FFT (consistent normalization with your pipeline).
-    window : bool
-        If True, apply a separable Hann window before the FFT to reduce edge bias.
-
-    Returns
-    -------
-    dict with keys:
-        alpha, beta : float
-            Phase slopes [rad/pixel] for x and y, respectively.
-        ramp : (Ny, Nx) complex
-            R(y,x) = exp(1j*(alpha*x + beta*y)).
-        center : (cy, cx) floats
-            Far-field intensity centroid in pixel coordinates.
-        center_rel : (dv, du) floats
-            Offsets from array center (i.e., COM minus (Ny-1)/2, (Nx-1)/2).
-    """
-    obj = np.asarray(obj)
-    Ny, Nx = obj.shape[-2], obj.shape[-1]
-    cy0, cx0 = (Ny - 1) / 2.0, (Nx - 1) / 2.0
-
-    O = obj
-    if window:
-        wy = np.hanning(Ny).reshape(Ny, 1)
-        wx = np.hanning(Nx).reshape(1, Nx)
-        O = O * (wy * wx)
-
-    F = fft2c(O)
-    I = np.abs(F)**2  # far-field intensity
-
-    # collapse any leading (batch) dims for the centroid
-    if I.ndim > 2:
-        I_for_com = I.sum(axis=tuple(range(I.ndim - 2)))
-    else:
-        I_for_com = I
-
-    # robust against NaN/Inf and negative values
-    I_for_com = np.nan_to_num(I_for_com, nan=0.0, posinf=0.0, neginf=0.0)
-    I_for_com[I_for_com < 0] = 0.0
-
-    cy, cx = ndi.center_of_mass(I_for_com)
-
-    # frequency-bin offsets relative to array center
-    dv = cy - cy0  # rows (y)
-    du = cx - cx0  # cols (x)
-
-    # convert to per-pixel phase slopes (rad/pixel)
-    alpha = -(2.0 * np.pi / Nx) * du  # x-slope
-    beta  = -(2.0 * np.pi / Ny) * dv  # y-slope
-
-    # build the ramp
-    y = np.arange(Ny, dtype=np.float64)[:, None]
-    x = np.arange(Nx, dtype=np.float64)[None, :]
-    ramp = np.exp(1j * (alpha * x + beta * y)).astype(np.result_type(obj, np.complex64), copy=False)
-
-    return {
-        "alpha": float(alpha),
-        "beta": float(beta),
-        "ramp": ramp,
-        "center": (float(cy), float(cx)),
-        "center_rel": (float(dv), float(du)),
-    }
-
-def remove_phase_ramp(obj, fft2c, window=False, return_all=False):
-    """
-    Cancel the object's linear phase ramp by multiplying with the conjugate ramp.
-
-    Returns
-    -------
-    obj_corr : same shape as obj
-    (optionally) info : dict returned by estimate_phase_ramp when return_all=True
-    """
-    info = estimate_phase_ramp(obj, fft2c, window=window)
-    obj_corr = obj * np.conj(info["ramp"])
-    return (obj_corr, info) if return_all else obj_corr
-
-
 def remove_phase_ramp(myObject):
     # find center of mass
     ftobj = fft2c(myObject) * np.conj(fft2c(myObject))
     ftobj = np.real(ftobj)
-    if np.ndim(ftobj)>2:
-        ftobj = np.sum(ftobj, axis=0)
     cy, cx = ndi.center_of_mass(ftobj)
     # re_center using fft or
     object_1_centered1 = ifft2c(re_center_ptychogram(fft2c(myObject), center_coord=np.array([cy, cx])))
@@ -960,70 +870,89 @@ def re_center_ptychogram(data, center_coord):
 
 
 
-def cropCenter(ptychogram, size, shift_x=None, shift_y=None, fill_value=0, center_of_mass_flag=False):
+
+def cropCenter(ptychogram, size, shift_x=None, shift_y=None, fill_value=0, center_of_mass_flag=False, flag_com_export=False):
     """
     Crop (and, if needed, pad) an array in its last two dimensions to a square of side 'size'.
-    Padding is applied when the requested (possibly shifted) window would fall outside the array.
+
+    Parameters:
+    -----------
+    ptychogram : ndarray
+        Input array. The crop is applied to the last two dimensions.
+    size : int
+        Desired size (side length) of the cropped region.
+    shift_x : int, optional
+        Additional horizontal shift (applied after center calculation).
+    shift_y : int, optional
+        Additional vertical shift (applied after center calculation).
+    fill_value : int or float, optional
+        Value used for padding if the requested crop size exceeds the array dimensions.
+    center_of_mass_flag : bool, optional
+        If True, the crop is centered on the center-of-mass computed from a 2D projection.
+        For arrays with more than 2 dimensions, the projection is computed as the mean
+        along the third dimension.
+
+    Returns:
+    --------
+    cropped : ndarray
+        The cropped (and possibly padded) array.
     """
-    # Spatial dims are the last two
+    # Get the spatial dimensions (last two dimensions)
     dim_y, dim_x = ptychogram.shape[-2], ptychogram.shape[-1]
 
-    # --- 1) choose center (float)
+    # Pad the array if the desired crop size exceeds the current dimensions.
+    if size > dim_y or size > dim_x:
+        pad_y = max(0, (size - dim_y) // 2)
+        pad_x = max(0, (size - dim_x) // 2)
+        # Only pad the last two dimensions
+        pad_width = ((0, 0),) * (ptychogram.ndim - 2) + ((pad_y, pad_y), (pad_x, pad_x))
+        ptychogram = np.pad(ptychogram, pad_width, mode='constant', constant_values=fill_value)
+        dim_y, dim_x = ptychogram.shape[-2], ptychogram.shape[-1]
+
+    # Determine the starting indices for cropping.
     if center_of_mass_flag:
+        # Compute a 2D projection if ptychogram has more than 2 dimensions.
         if ptychogram.ndim > 2:
-            proj = np.mean(ptychogram, axis=0)
+            proj = np.mean(ptychogram, axis=0)**2
+            # proj = ptychogram[0]**2
         else:
-            proj = ptychogram
+            proj = ptychogram**2
 
+        # Use SciPy's center_of_mass to calculate the center.
         com = center_of_mass(proj)
-        if np.any(np.isnan(com)):
-            cy, cx = dim_y / 2.0, dim_x / 2.0
+        print(com)
+        # If the computed center is invalid (e.g. if the sum is zero and results in NaNs), 
+        # default to the geometric center.
+        if np.isnan(com[0]) or np.isnan(com[1]):
+            com_y, com_x = dim_y // 2, dim_x // 2
         else:
-            cy, cx = float(com[0]), float(com[1])
+            com_y, com_x = com
+
+        # Calculate the starting indices so that the crop is centered on the center of mass.
+        start_y = int(round(com_y)) - size // 2
+        start_x = int(round(com_x)) - size // 2
+
+        if shift_y is not None:
+            start_y += shift_y
+        if shift_x is not None:
+            start_x += shift_x
     else:
-        cy, cx = dim_y / 2.0, dim_x / 2.0
+        # Use the geometric center.
+        start_y = dim_y // 2 - size // 2 + (shift_y if shift_y is not None else 0)
+        start_x = dim_x // 2 - size // 2 + (shift_x if shift_x is not None else 0)
+        shift_x, shift_y = None, None
+    # Ensure the starting indices are not negative.
+    start_y = max(start_y, 0)
+    start_x = max(start_x, 0)
 
-    # --- 2) apply shifts
-    if shift_y is not None:
-        cy += float(shift_y)
-    if shift_x is not None:
-        cx += float(shift_x)
+    # Crop the array along the last two dimensions.
+    cropped = ptychogram[..., start_y: start_y + size, start_x: start_x + size]
+    if flag_com_export:
+        return cropped, shift_y, shift_x
+    else:
+        return cropped
 
-    # --- 3) desired window [start, end) BEFORE padding
-    half = size / 2.0
-    start_y = int(np.floor(cy - half))
-    start_x = int(np.floor(cx - half))
-    end_y   = start_y + size
-    end_x   = start_x + size
 
-    # --- 4) compute required padding on each side to accommodate the window
-    pad_top    = max(0, -start_y)
-    pad_left   = max(0, -start_x)
-    pad_bottom = max(0, end_y - dim_y)
-    pad_right  = max(0, end_x - dim_x)
-
-    if any(v > 0 for v in (pad_top, pad_bottom, pad_left, pad_right)):
-        # build pad spec: pad only last two dims
-        pad_spec = [(0, 0)] * (ptychogram.ndim - 2) + [(pad_top, pad_bottom), (pad_left, pad_right)]
-        ptychogram = np.pad(ptychogram, pad_spec, mode='constant', constant_values=fill_value)
-        # update dims after padding
-        dim_y += pad_top + pad_bottom
-        dim_x += pad_left + pad_right
-        # shift window into padded coordinates
-        start_y += pad_top
-        start_x += pad_left
-        end_y = start_y + size
-        end_x = start_x + size
-
-    # --- 5) safe-guard (should be inside now, but clamp just in case)
-    start_y = max(0, min(start_y, dim_y - size))
-    start_x = max(0, min(start_x, dim_x - size))
-    end_y   = start_y + size
-    end_x   = start_x + size
-
-    # --- 6) slice
-    cropped = ptychogram[..., start_y:end_y, start_x:end_x]
-    return cropped
 def phase_ramp(slope_x, slope_y, offset, shape):
     """
     Adds a phase rampt to the object.
@@ -1193,372 +1122,6 @@ def FRC(image_1, image_2, filter=True, global_phase_pos=None, filter_radius=100,
     return frc, one_bit_crit, half_bit_crit, error(image_1, image_2)
 
 
-def remove_ramp_three_point(phase_map, points, area_size=3,):
-    """
-    Remove a linear phase ramp from a 2D phase map using three reference points.
-
-    Parameters
-    ----------
-    phase_map : 2D ndarray
-        Input phase map (in radians).
-    points : list of tuples
-        List of (y, x) coordinates for three reference points.
-    area_size : int, optional
-        Size of the square region (n×n) around each point to average phase.
-    unwrap : bool, optional
-        If True, unwrap the phase before ramp removal.
-
-    Returns
-    -------
-    phase_corrected : 2D ndarray
-        Phase map with ramp removed.
-    ramp : 2D ndarray
-        The fitted ramp that was subtracted.
-    coeffs : tuple
-        (a, b, c) coefficients of the fitted plane: a*x + b*y + c
-    """
-    phase = np.array(phase_map, dtype=float)
-
-    # Average phase in area around each point
-    coords = []
-    values = []
-    r = area_size // 2
-
-    for (y, x) in points:
-        y_min, y_max = max(0, y - r), min(phase.shape[0], y + r + 1)
-        x_min, x_max = max(0, x - r), min(phase.shape[1], x + r + 1)
-        area_phase = phase[y_min:y_max, x_min:x_max]
-        coords.append((x, y))
-        values.append(np.mean(area_phase))
-
-    # Fit plane to these 3 averaged points
-    coords = np.array(coords)
-    values = np.array(values)
-    A = np.c_[coords[:, 0], coords[:, 1], np.ones(3)]
-    coeffs, _, _, _ = np.linalg.lstsq(A, values, rcond=None)  # a, b, c
-
-    # Compute ramp over full grid
-    ny, nx = phase.shape
-    Y, X = np.meshgrid(np.arange(ny), np.arange(nx), indexing='ij')
-    ramp = (coeffs[0] * X + coeffs[1] * Y + coeffs[2])
-
-    # Subtract ramp
-    phase_corrected = phase - ramp
-
-    return phase_corrected
-
-def remove_phase_ramp_three_point_complex(field, points, area_size=3):
-    """
-    Remove a linear phase ramp from a 2D complex field using three reference points.
-
-    Parameters
-    ----------
-    field : 2D ndarray (complex)
-        Input complex field.
-    points : list of tuples
-        List of (y, x) coordinates for three reference points.
-    area_size : int, optional
-        Size of the square region (n×n) around each point to average phase.
-
-    Returns
-    -------
-    corrected_field : 2D ndarray (complex)
-        Complex field with linear phase ramp removed.
-    ramp_phase : 2D ndarray (float)
-        The phase ramp (in radians) that was subtracted.
-    coeffs : tuple of floats
-        (a, b, c) coefficients of the fitted phase plane: a*x + b*y + c
-    """
-    if np.iscomplexobj(field) is False:
-        raise ValueError("Input must be a complex-valued array.")
-
-    phase = np.angle(field)
-    ny, nx = field.shape
-    r = area_size // 2
-
-    # Extract averaged phases from 3 areas
-    coords = []
-    values = []
-
-    for (y, x) in points:
-        y_min, y_max = max(0, y - r), min(ny, y + r + 1)
-        x_min, x_max = max(0, x - r), min(nx, x + r + 1)
-        region = phase[y_min:y_max, x_min:x_max]
-        coords.append((x, y))
-        values.append(np.mean(region))
-
-    coords = np.array(coords)
-    values = np.unwrap(values)  # unwrap 1D to avoid ambiguity
-
-    A = np.c_[coords[:, 0], coords[:, 1], np.ones(3)]
-    coeffs, _, _, _ = np.linalg.lstsq(A, values, rcond=None)  # a, b, c
-
-    # Build ramp
-    Y, X = np.meshgrid(np.arange(ny), np.arange(nx), indexing='ij')
-    ramp_phase = coeffs[0] * X + coeffs[1] * Y + coeffs[2]
-
-    # Subtract ramp
-    corrected_field = field * np.exp(-1j * ramp_phase)
-
-    return corrected_field, ramp_phase
-
-def equalize_phase_ramp_roi(
-    obj1: np.ndarray,
-    obj2: np.ndarray,
-    roi: tuple,                 # (y0, y1, x0, x1)
-    weight: str = "amp",        # "none", "amp" (|o1|*|o2|), or "amp2" ((|o1|*|o2|)^2)
-    amp_thresh: float = 0.0,    # relative threshold on |o1| and |o2| inside ROI (e.g. 0.1)
-    apply: str = "obj2",        # "obj2" (default), "both" (split half to each)
-    return_ramp: bool = False,  # return ramp map and coeffs
-):
-    """
-    Fit a phase plane to the phase difference in a rectangular ROI and subtract it
-    (to minimize L2 error of phase difference in that ROI).
-
-    Assumes obj1 and obj2 are already spatially aligned and same shape.
-    """
-    if obj1.shape != obj2.shape:
-        raise ValueError("obj1 and obj2 must have the same shape")
-
-    y0, y1, x0, x1 = roi
-    if not (0 <= y0 < y1 <= obj1.shape[0] and 0 <= x0 < x1 <= obj1.shape[1]):
-        raise ValueError("ROI is out of bounds")
-
-    # Phase difference (wrapped), then unwrap crudely along both axes
-    ph_diff_full = np.angle(obj1 * np.conj(obj2))
-    ph_roi = ph_diff_full[y0:y1, x0:x1]
-    ph_roi_unw = np.unwrap(np.unwrap(ph_roi, axis=0), axis=1)
-
-    # Weights
-    if weight == "amp":
-        w_roi = (np.abs(obj1[y0:y1, x0:x1]) * np.abs(obj2[y0:y1, x0:x1]))
-    elif weight == "amp2":
-        w_roi = (np.abs(obj1[y0:y1, x0:x1]) * np.abs(obj2[y0:y1, x0:x1]))**2
-    else:
-        w_roi = np.ones_like(ph_roi_unw)
-
-    if amp_thresh > 0:
-        a1 = np.abs(obj1[y0:y1, x0:x1])
-        a2 = np.abs(obj2[y0:y1, x0:x1])
-        m = (a1 > amp_thresh * a1.max()) & (a2 > amp_thresh * a2.max())
-        # avoid all-zero mask
-        if np.any(m):
-            w_roi = w_roi * m.astype(float)
-
-    # Build coordinates over ROI (global indices)
-    yy, xx = np.mgrid[y0:y1, x0:x1]
-
-    # Weighted least squares fit to ph ~ a*x + b*y + c
-    X = np.c_[xx.ravel(), yy.ravel(), np.ones(xx.size)]
-    y = ph_roi_unw.ravel()
-    W = np.sqrt(w_roi.ravel() + 1e-12)  # sqrt weights for WLS
-    Xw = X * W[:, None]
-    yw = y * W
-    coeffs, *_ = np.linalg.lstsq(Xw, yw, rcond=None)  # [a, b, c]
-
-    a, b, c = coeffs
-
-    # Build full-image ramp using global coordinates
-    Yfull, Xfull = np.indices(obj1.shape)
-    ramp_full = a * Xfull + b * Yfull + c
-
-    if apply == "obj2":
-        obj1_corr = obj1
-        obj2_corr = obj2 * np.exp(-1j * ramp_full)
-    elif apply == "both":
-        half = 0.5 * ramp_full
-        obj1_corr = obj1 * np.exp(+1j * half)
-        obj2_corr = obj2 * np.exp(-1j * half)
-    else:
-        raise ValueError("apply must be 'obj2' or 'both'")
-
-    if return_ramp:
-        return obj1_corr, obj2_corr, ramp_full, (a, b, c)
-    return obj1_corr, obj2_corr
-
-def equalize_phase_ramp_via_fft_shift(u1: np.ndarray, u2: np.ndarray, window=True, upsample=100):
-    """
-    Estimate linear phase ramp between u1 and u2 by registering the shift
-    between their FFT magnitudes, then remove that ramp from u2.
-
-    Returns
-    -------
-    u1_corr, u2_corr, kappa : (ndarray, ndarray, tuple)
-        Corrected fields and (Δky, Δkx) in cycles/pixel.
-    """
-    if u1.shape != u2.shape:
-        raise ValueError("u1 and u2 must have the same shape")
-
-    H, W = u1.shape
-
-    # 1) Apodization to reduce leakage (optional but recommended)
-    if window:
-        wy = np.hanning(H)
-        wx = np.hanning(W)
-        win = np.outer(wy, wx)
-    else:
-        win = 1.0
-
-    u1w = u1 * win
-    u2w = u2 * win
-
-    # 2) FFT magnitudes
-    U1 = fftshift(fft2(u1w))
-    U2 = fftshift(fft2(u2w))
-    A1 = np.abs(U1)
-    A2 = np.abs(U2)
-
-    # 3) Subpixel shift between spectra magnitudes (in pixels in k-space grid)
-    # phase_cross_correlation returns (shift_y, shift_x) to apply to A2 to align to A1
-    dky_px, dkx_px = register_translation(A1, A2, upsample_factor=upsample)[0]
-
-    # 4) Convert "pixel shift in FFT image" to spectral shift (cycles/pixel)
-    # fftshifted spectrum is on an integer pixel grid; 1 pixel in FFT corresponds to 1/W (x) or 1/H (y) cycles/pixel
-    dkx = dkx_px / W
-    dky = dky_px / H
-
-    # 5) Build real-space ramp: exp(-i 2π (dkx * X + dky * Y)) and apply to u2
-    Y, X = np.indices((H, W))
-    ramp = np.exp(-2j * np.pi * (dkx * X + dky * Y))
-    u2_corr = u2 * ramp
-
-    return u1, u2_corr
-
-def align_objects(obj1_ref, obj2, preference='auto', shift_tol=1e-3, error_tol=1e-4, method='spline'):
-    """
-    Aligns  obj2 to  obj1_ref based on amplitude or phase, using residual shift and image error criteria.
-
-    Parameters
-    ----------
-    preference : str
-        Alignment mode:
-            'auto'      : use best shift based on residual + error metric
-            'phase'     : accept phase shift if both criteria improve
-            'amplitude' : accept amplitude shift if both criteria improve
-    shift_tol : float
-        Minimum reduction in shift norm required to accept alignment
-    error_tol : float
-        Minimum reduction in image error required to accept alignment
-
-    Returns
-    -------
-    bool
-        True if no shift was applied (alignment rejected), False otherwise.
-    """
-
-    verbose = True
-    def fourier_shift2d_complex(u: np.ndarray, shift_vec):
-        """
-        Coherent subpixel shift via Fourier shift theorem.
-        shift_vec = (dy, dx) in pixel units (same sign convention as register_translation).
-        """
-        ny, nx = u.shape
-        dy, dx = float(shift_vec[0]), float(shift_vec[1])
-
-        # frequency grids in cycles/pixel
-        fy = np.fft.fftfreq(ny)  # 0, 1/ny, ..., (ny-1)/ny with negative freqs wrapped
-        fx = np.fft.fftfreq(nx)
-        FY, FX = np.meshgrid(fy, fx, indexing='ij')
-
-        # phase ramp exp(-2πi (fx*dx + fy*dy))
-        ramp = np.exp(-2j * np.pi * (FX * dx + FY * dy))
-
-        U = fft2c(u)
-        U_shifted = U * ramp
-        u_shifted = ifft2c(U_shifted)
-
-        # if input is real-space non-periodic, consider windowing/padding before calling
-        return u_shifted
-
-    def error_metric(image1, image2):
-        return np.sum(np.abs(image1 - image2) ** 2) / np.sum(np.abs(image1) ** 2)
-
-    def apply_shift(obj, shift_vec, method):
-        if method =='fourier':
-            return fourier_shift2d_complex(obj, shift_vec)
-        elif method=='spline':
-            return shift(np.real(obj), shift_vec, order=5) + 1j * shift(np.imag(obj), shift_vec, order=5)
-
-    def compute_residual_shift(a, b):
-        return register_translation(np.abs(a), np.abs(b), upsample_factor=100)[0]
-
-    # Compute initial shifts
-    shift_amp = register_translation(np.abs(  obj1_ref), np.abs(  obj2), upsample_factor=100)[0]
-    shift_phs = register_translation(np.angle(  obj1_ref), np.angle(  obj2), upsample_factor=100)[0]
-
-    # Apply shifts
-    object2_amp_shifted = apply_shift(  obj2, shift_amp, method)
-    object2_phs_shifted = apply_shift(  obj2, shift_phs, method)
-
-    # Residual shift
-    resid_shift_amp = compute_residual_shift(  obj1_ref, object2_amp_shifted)
-    resid_shift_phs = compute_residual_shift(  obj1_ref, object2_phs_shifted)
-
-    # Shift norms
-    norm_init_amp = np.linalg.norm(shift_amp)
-    norm_init_phs = np.linalg.norm(shift_phs)
-    norm_resid_amp = np.linalg.norm(resid_shift_amp)
-    norm_resid_phs = np.linalg.norm(resid_shift_phs)
-
-    # Errors
-    err_amp = error_metric(  obj1_ref, object2_amp_shifted)
-    err_phs = error_metric(  obj1_ref, object2_phs_shifted)
-    err_init = error_metric(  obj1_ref,   obj2)
-
-    if verbose:
-        print(f"Initial shift (amplitude): {shift_amp}, norm={norm_init_amp:.3e}")
-        print(f"Initial shift (phase):     {shift_phs}, norm={norm_init_phs:.3e}")
-        print(f"Residual shift (amp):      {resid_shift_amp}, norm={norm_resid_amp:.3e}")
-        print(f"Residual shift (phs):      {resid_shift_phs}, norm={norm_resid_phs:.3e}")
-        print(f"Initial error: {err_init:.4e}")
-        print(f"Amp error:     {err_amp:.4e}")
-        print(f"Phs error:     {err_phs:.4e}")
-
-    def criteria_ok(resid_norm, init_norm, err, err_init):
-        # return (resid_norm < init_norm - shift_tol) and (err < err_init - error_tol)
-        return err < (err_init - error_tol)
-        # return resid_norm < init_norm - shift_tol
-
-    # Decision logic
-    if preference == 'phase':
-        if criteria_ok(norm_resid_phs, norm_init_phs, err_phs, err_init):
-            if verbose:
-                print("Using phase-based shift (forced).")
-            obj2 = object2_phs_shifted
-            return False, obj2
-
-    elif preference == 'amplitude':
-        if criteria_ok(norm_resid_amp, norm_init_amp, err_amp, err_init):
-            if verbose:
-                print("Using amplitude-based shift (forced).")
-            obj2 = object2_amp_shifted
-            return False, obj2
-
-    elif preference == 'auto':
-        phase_ok = criteria_ok(norm_resid_phs, norm_init_phs, err_phs, err_init)
-        amp_ok = criteria_ok(norm_resid_amp, norm_init_amp, err_amp, err_init)
-
-        if phase_ok and (not amp_ok or err_phs < err_amp):
-            if verbose:
-                print("Using phase-based shift (auto).")
-            obj2 = object2_phs_shifted
-            return False, obj2
-
-        elif amp_ok:
-            if verbose:
-                print("Using amplitude-based shift (auto).")
-            obj2 = object2_amp_shifted
-            return False, obj2
-
-    else:
-        raise ValueError(f"Invalid preference '{preference}'. Use 'auto', 'phase', or 'amplitude'.")
-
-    if verbose:
-        print("No alignment accepted — neither strategy improved both shift and error.")
-    return True,  obj2
-
-
-
 class MyFRC:
     """
     Example to use:
@@ -1584,146 +1147,63 @@ class MyFRC:
     myFRC.plotFRC()
     myFRC.get_spatial_resolution()
     """
-    def __init__(self, object1, object2, dx, FRC_obj_size):
-        self.object1_raw = object1
-        self.object2_raw = object2
+    def __init__(self, object1, object2, dx):
+        self.object1 = object1
+        self.object2 = object2
         self.dx = dx
-        self.FRC_obj_size = FRC_obj_size
-        self.FRC_sx = 0
-        self.FRC_sy = 0
         self._match_shape()
 
     def _match_shape(self):
-        s1 = self.object1_raw.shape
-        s2 = self.object2_raw.shape
+        s1 = self.object1.shape
+        s2 = self.object2.shape
         min_shape = min(s1,s2)
         if s1 != min_shape:
             # crop obj1 to obj2's shape
-            self.object1_raw = cropCenter(self.object1_raw, size=min_shape[0])
+            self.object1 = cropCenter(self.object1,size=min_shape[0])  
         if s2 != min_shape:
             #crop obj2 to obj1's shape
-            self.object2_raw = cropCenter(self.object2_raw, size=min_shape[0])
-            
-        self.object1_processed = np.copy(self.object1_raw)
-        self.object2_processed = np.copy(self.object2_raw)
-
+            self.object2 = cropCenter(self.object2, size=min_shape[0])
+    
     def show_raw_data(self):
         # plot raw data
         fig, axes = plt.subplots(1, 2)
         axes = axes.flatten()
         fig.suptitle('raw files')
-        axes[0].imshow(complex2rgb(self.object1_raw))
+        axes[0].imshow(complex2rgb(self.object1))
         axes[0].set_axis_off()
-        axes[1].imshow(complex2rgb(self.object2_raw))
+        axes[1].imshow(complex2rgb(self.object2))
         axes[1].set_axis_off()
         fig.canvas.draw()#(block=False)
-    
-    def show_processed_data(self, ROI=False):
-        if ROI:
-            obj1 = cropCenter(self.object1_processed, self.FRC_obj_size, shift_x=self.FRC_sx, shift_y=self.FRC_sy)
-            obj2 = cropCenter(self.object2_processed, self.FRC_obj_size, shift_x=self.FRC_sx, shift_y=self.FRC_sy)
-        else:
-            obj1 = self.object1_processed
-            obj2 = self.object2_processed
-
-        h, w = obj1.shape
-        out = np.empty_like(obj1)
-        cut = w // 2
-        out[:, :cut] = obj1[:, :cut]
-        out[:, cut:] = obj2[:, cut:]
-
-        abs_difference = np.abs(abs(obj1) - abs(obj2)) ** 2 / np.amax(
-            np.abs(obj1) ** 2)
-        ang_difference = np.angle(obj1 *np.conj(obj2))
-        # plot raw data
-        fig, axes = plt.subplots(1, 3)
-        axes = axes.flatten()
-        fig.suptitle('processed files')
-        axes[0].imshow(complex2rgb(out))
-        axes[0].set_axis_off()
-        eps = 1e-12
-        im2 = axes[1].imshow(abs_difference, cmap='viridis')
-        fig.colorbar(im2, ax=axes[1], fraction=0.046, pad=0.04)
-        axes[1].set_axis_off()
-        im3 = axes[2].imshow(ang_difference, cmap='twilight')
-        fig.colorbar(im3, ax=axes[2], fraction=0.046, pad=0.04)
-        axes[2].set_axis_off()
-        axes[1].set_title(f'log amp diff')
-        axes[2].set_title(f'phase diff')
-        fig.show()
 
     def normalize_amplitude(self):
-        N = self.object1_processed.shape[-1] // 2
+        # normalized amplitude
+        # self.object1 /= np.sqrt(np.abs(self.object1)).mean()
+        # self.object2 /= np.sqrt(np.abs(self.object2)).mean()
+        # self.object1 /= np.mean(np.abs(self.object1))
+        # self.object2 /= np.mean(np.abs(self.object2))
+
+        # self.object1 /= np.amax(np.abs(self.object1))
+        # self.object2 /= np.amax(np.abs(self.object2))
+        # print(np.abs(self.object1).mean())
+        # print(np.abs(self.object2).mean())
+
+        N = self.object1.shape[-1] // 2
         W = int(N * 0.4)
-        self.object1_processed /= np.abs(self.object1_processed[N - W // 2:N + W // 2, N - W // 2:N + W // 2]).mean()
-        self.object2_processed /= np.abs(self.object2_processed[N - W // 2:N + W // 2, N - W // 2:N + W // 2]).mean()
+        self.object1 /= np.abs(self.object1[N-W//2:N+W//2,N-W//2:N+W//2]).mean()
+        self.object2 /= np.abs(self.object2[N-W//2:N+W//2,N-W//2:N+W//2]).mean()
 
-    def remove_phase_ramp(self, points):
-
-        # remove phase ramp
-        self.obj1_v1, ramp = remove_phase_ramp_three_point_complex(self.object1_raw, points)
-        self.obj2_v1  = self.object2_raw * np.exp(-1j*ramp)#remove_phase_ramp_three_point_complex(self.object2_raw, points)
-
-        _, self.obj1_v2 = remove_phase_ramp(self.object1_raw)
-        _, self.obj2_v2 = remove_phase_ramp(self.object2_raw)
-
-        self.results_phase_ramp = [[self.object1_raw, self.obj1_v1, self.obj1_v2],
-                                   [self.object2_raw, self.obj2_v1, self.obj2_v2]]
-
-    
-    def remove_phase_ramp_three_points(self, points):
-        self.object1_processed, _ = remove_phase_ramp_three_point_complex(self.object1_processed, points)
-        self.object2_processed, _ = remove_phase_ramp_three_point_complex(self.object2_processed, points)
-    def equalize_phase_ramps(self, **kwargs):
-        # self.object1_processed, self.object2_processed = equalize_phase_ramp_roi(self.object1_processed,
-        #                                                                          self.object2_processed,
-        #                                                                          **kwargs)
-        self.object1_processed, self.object2_processed = equalize_phase_ramp_via_fft_shift(self.object1_processed,
-                                                                                 self.object2_processed)
-
-    def normalize_amplitude_region(self, point: tuple, size: int) -> np.ndarray:
-        """
-        Normalize the amplitude of a complex field so that the mean amplitude
-        in a given square region is 1.
-
-        Parameters
-        ----------
-        point : tuple
-            (y, x) coordinates of the region center (in pixels).
-        size : int
-            Size of the square region (in pixels).
-
-        Returns
-        -------
-        u_norm : np.ndarray
-            Amplitude-normalized complex array.
-        """
-        y0, x0 = point
-        half = size // 2
-        h, w = self.object1_processed.shape
-        # Ensure bounds
-        y_min, y_max = max(0, y0 - half), min(h, y0 + half + (size % 2))
-        x_min, x_max = max(0, x0 - half), min(w, x0 + half + (size % 2))
-
-        # Compute mean amplitude in region
-        self.object1_processed /= np.abs(self.object1_processed[y_min:y_max, x_min:x_max]).mean()
-        self.object2_processed /= np.abs(self.object2_processed[y_min:y_max, x_min:x_max]).mean()
-        phase1 = np.angle(self.object1_processed[y_min:y_max, x_min:x_max]).mean()
-        phase2 = np.angle(self.object2_processed[y_min:y_max, x_min:x_max]).mean()
-        self.object1_processed *= np.exp(-1j * phase1)
-        self.object2_processed *= np.exp(-1j * phase2)
-
-    def normalize_amplitudes_and_remove_global_phase(self, obj1, obj2):
-        N = obj1.shape[-1] // 2
+    def normalize_amplitude2(self):
+        N = self.object1p.shape[-1] // 2
         W = int(N * 0.4)
-        obj1 /= np.abs(obj1[N-W//2:N+W//2,N-W//2:N+W//2]).mean()
-        obj2 /= np.abs(obj2[N-W//2:N+W//2,N-W//2:N+W//2]).mean()
-        # Align global phase between complex fields
-        phase_offset = np.angle(np.vdot(obj1, obj2))  # ⟨obj1, obj2⟩ inner product
-        print(f'global phase offset: {phase_offset}')
-        obj2 = obj2 * np.exp(-1j * phase_offset)
-        return obj1, obj2
+        self.object1p /= np.abs(self.object1p[N-W//2:N+W//2,N-W//2:N+W//2]).mean()
+        self.object2p /= np.abs(self.object2p[N-W//2:N+W//2,N-W//2:N+W//2]).mean()
 
+    def remove_global_phase_from_point(self, px=0, py=0):
+        # same phase
+        ref_phase = np.angle(self.object1p[py, px])
+        self.object1p *= np.exp(-1j * ref_phase)
+        ref_phase = np.angle(self.object2p[py, px])
+        self.object2p *= np.exp(-1j * ref_phase)
 
     def remove_global_phase_from_avg_region(self, region):
         # same phase
@@ -1734,145 +1214,125 @@ class MyFRC:
         ref_phase = np.mean(ref_phase)
         self.object2p *= np.exp(-1j * ref_phase)
 
+    def remove_phase_ramp(self):
+        # remove phase ramp
+        self.obj1_v1, self.obj1_v2 = remove_phase_ramp(self.object1)
+        self.obj2_v1, self.obj2_v2 = remove_phase_ramp(self.object2)
+        self.results_phase_ramp = [[self.object1, self.obj1_v1, self.obj1_v2],
+                                   [self.object2, self.obj2_v1, self.obj2_v2]]
 
-    def fourier_shift2d_complex(self, u: np.ndarray, shift_vec):
+    def show_comparison_after_phase_ramp_removal(self, id=0):
+        if id == 0:  # show for obj1    
+            before = self.object1
+            v1 = self.obj1_v1
+            v2 = self.obj1_v2
+        if id == 1:  # show for obj1    
+            before = self.object2
+            v1 = self.obj2_v1
+            v2 = self.obj2_v2
+
+        # show comparison raw, centered 1, centered 2
+        fig, axes = plt.subplots(1, 3)
+        axes = axes.flatten()
+        fig.suptitle(f'phase ramp removal object {id+1:.0f}')
+        axes[0].set_title('original')
+        axes[0].imshow(complex2rgb(before))
+        axes[0].set_axis_off()
+        axes[1].set_title('V1')
+        axes[1].imshow(complex2rgb(v1))
+        axes[1].set_axis_off()
+        axes[2].set_title('V2')
+        axes[2].imshow(complex2rgb(v2))
+        axes[2].set_axis_off()
+        fig.tight_layout()
+        fig.show()
+
+    def choose_phase_ramp_result(self, id=0, result=0):
         """
-        Coherent subpixel shift via Fourier shift theorem.
-        shift_vec = (dy, dx) in pixel units (same sign convention as register_translation).
+        :param id: 0 for 0bjec1, 1 for object 2 
+        :param result: 0,1,2 [original, v1, v2] see plot_comparison_after_phase_ramp_removal
+        :return: None
         """
-        ny, nx = u.shape
-        dy, dx = float(shift_vec[0]), float(shift_vec[1])
+        if id == 0:
+            self.object1p = self.results_phase_ramp[id][result]
+        if id == 1:
+            self.object2p = self.results_phase_ramp[id][result]
 
-        # frequency grids in cycles/pixel
-        fy = np.fft.fftfreq(ny)  # 0, 1/ny, ..., (ny-1)/ny with negative freqs wrapped
-        fx = np.fft.fftfreq(nx)
-        FY, FX = np.meshgrid(fy, fx, indexing='ij')
+    def align_objects(self):
+        N = self.object1p.shape[-1] // 2
+        W = int(N * 1)
+        region = np.zeros_like(self.object1p)
+        region[N-W//2:N+W//2,N-W//2:N+W//2] = 1.0
+        object_2 = self.object1p #* region
+        object_1 = self.object2p #* region
 
-        # phase ramp exp(-2πi (fx*dx + fy*dy))
-        ramp = np.exp(-2j * np.pi * (FX * dx + FY * dy))
+        # align objects
+        # check error metric before shift
+        error_bs = error(self.object1p, self.object2p)
+        # First check if both images have the same center:
+        # check using amplitude
+        shift_distance1 = register_translation(np.abs(object_1), np.abs(object_2), upsample_factor=100)[0]
+        print("Shift distance amp: " + str(shift_distance1))
+        # check using phase
+        shift_distance2 = register_translation(np.angle(object_1), np.angle(object_2), upsample_factor=100)[0]
+        print("Shift distance phase: " + str(shift_distance2))
+        shift_distance = -shift_distance1
+        shift_distance2 = -shift_distance2
 
-        U = fft2c(u)
-        U_shifted = U * ramp
-        u_shifted = ifft2c(U_shifted)
+        # shift_distance += np.array([0, .3])
+        temp = shift(np.real(self.object2p), shift_distance, order=5) + 1j * shift(np.imag(self.object2p),
+                                                                                    shift_distance,
+                                                                                    order=5)
+        temp2 = shift(np.real(self.object2p), shift_distance2, order=5) + 1j * shift(np.imag(self.object2p),
+                                                                                   shift_distance2,
+                                                                                   order=5)
 
-        # if input is real-space non-periodic, consider windowing/padding before calling
-        return u_shifted
+        # check error after shift
+        error_as = error(self.object1p, temp)
+        error_ph = error(self.object1p, temp2)
+        print(f'error before shift: {error_bs}\n'
+              f'error after shift (amp): {error_as}\n'
+              f'error after shift (phase): {error_ph}')
+        if error_as < error_bs or error_ph < error_bs:
+            if error_as < error_ph:
+                self.object2p = temp
+            else:
+                self.object2p = temp2
 
-    def align_objects(self, preference='auto', shift_tol=1e-3, error_tol=1e-4, method='spline'):
-        """
-        Aligns object2_processed to object1_processed based on amplitude or phase, using residual shift and image error criteria.
+        # self.object2p = temp
 
-        Parameters
-        ----------
-        preference : str
-            Alignment mode:
-                'auto'      : use best shift based on residual + error metric
-                'phase'     : accept phase shift if both criteria improve
-                'amplitude' : accept amplitude shift if both criteria improve
-        shift_tol : float
-            Minimum reduction in shift norm required to accept alignment
-        error_tol : float
-            Minimum reduction in image error required to accept alignment
+    def show_centered_objects(self):
+        fig, axes = plt.subplots(1, 3)
+        axes = axes.flatten()
+        fig.suptitle('aligned objects')
+        axes[0].imshow(complex2rgb(self.object1p))
+        axes[0].set_axis_off()
+        axes[1].imshow(complex2rgb(self.object2p))
+        axes[1].set_axis_off()
+        axes[2].set_title('abs difference')
+        # difference = np.abs(self.object1p)**2 - np.abs(self.object2p)**2 / np.amax(np.abs(self.object1p)**2)
+        difference = np.abs(self.object1p - self.object2p) ** 2 / np.amax(np.abs(self.object1p)**2)#- np.abs(self.object2p) ** 2  # / np.abs(self.object2p)**2
+        # difference = np.abs(self.object1p)**2 - np.abs(self.object2p)**2 / \
+        #              (np.abs(self.object1p)**2 + np.abs(self.object2p)**2)
 
-        Returns
-        -------
-        bool
-            True if no shift was applied (alignment rejected), False otherwise.
-        """
+        im=axes[2].imshow(difference, cmap='twilight')
+        axes[2].set_axis_off()
+        fig.colorbar(im, ax=axes[2], shrink=0.9)
+        fig.tight_layout()
+        fig.show()
 
-        verbose = True
-
-        def error_metric(image1, image2):
-            return np.sum(np.abs(image1 - image2) ** 2) / np.sum(np.abs(image1) ** 2)
-
-        def apply_shift(obj, shift_vec, method):
-            if method =='fourier':
-                return self.fourier_shift2d_complex(obj, shift_vec)
-            elif method=='spline':
-                return shift(np.real(obj), shift_vec, order=5) + 1j * shift(np.imag(obj), shift_vec, order=5)
-
-        def compute_residual_shift(a, b):
-            return register_translation(np.abs(a), np.abs(b), upsample_factor=100)[0]
-
-        # Compute initial shifts
-        shift_amp = register_translation(np.abs(self.object1_processed), np.abs(self.object2_processed), upsample_factor=100)[0]
-        shift_phs = register_translation(np.angle(self.object1_processed), np.angle(self.object2_processed), upsample_factor=100)[0]
-
-        # Apply shifts
-        object2_amp_shifted = apply_shift(self.object2_processed, shift_amp, method)
-        object2_phs_shifted = apply_shift(self.object2_processed, shift_phs, method)
-
-        # Residual shift
-        resid_shift_amp = compute_residual_shift(self.object1_processed, object2_amp_shifted)
-        resid_shift_phs = compute_residual_shift(self.object1_processed, object2_phs_shifted)
-
-        # Shift norms
-        norm_init_amp = np.linalg.norm(shift_amp)
-        norm_init_phs = np.linalg.norm(shift_phs)
-        norm_resid_amp = np.linalg.norm(resid_shift_amp)
-        norm_resid_phs = np.linalg.norm(resid_shift_phs)
-
-        # Errors
-        err_amp = error_metric(self.object1_processed, object2_amp_shifted)
-        err_phs = error_metric(self.object1_processed, object2_phs_shifted)
-        err_init = error_metric(self.object1_processed, self.object2_processed)
-
-        if verbose:
-            print(f"Initial shift (amplitude): {shift_amp}, norm={norm_init_amp:.3e}")
-            print(f"Initial shift (phase):     {shift_phs}, norm={norm_init_phs:.3e}")
-            print(f"Residual shift (amp):      {resid_shift_amp}, norm={norm_resid_amp:.3e}")
-            print(f"Residual shift (phs):      {resid_shift_phs}, norm={norm_resid_phs:.3e}")
-            print(f"Initial error: {err_init:.4e}")
-            print(f"Amp error:     {err_amp:.4e}")
-            print(f"Phs error:     {err_phs:.4e}")
-
-        def criteria_ok(resid_norm, init_norm, err, err_init):
-            # return (resid_norm < init_norm - shift_tol) and (err < err_init - error_tol)
-            return err < (err_init - error_tol)
-            # return resid_norm < init_norm - shift_tol
-
-        # Decision logic
-        if preference == 'phase':
-            if criteria_ok(norm_resid_phs, norm_init_phs, err_phs, err_init):
-                if verbose:
-                    print("Using phase-based shift (forced).")
-                self.object2_processed = object2_phs_shifted
-                return False
-
-        elif preference == 'amplitude':
-            if criteria_ok(norm_resid_amp, norm_init_amp, err_amp, err_init):
-                if verbose:
-                    print("Using amplitude-based shift (forced).")
-                self.object2_processed = object2_amp_shifted
-                return False
-
-        elif preference == 'auto':
-            phase_ok = criteria_ok(norm_resid_phs, norm_init_phs, err_phs, err_init)
-            amp_ok = criteria_ok(norm_resid_amp, norm_init_amp, err_amp, err_init)
-
-            if phase_ok and (not amp_ok or err_phs < err_amp):
-                if verbose:
-                    print("Using phase-based shift (auto).")
-                self.object2_processed = object2_phs_shifted
-                return False
-
-            elif amp_ok:
-                if verbose:
-                    print("Using amplitude-based shift (auto).")
-                self.object2_processed = object2_amp_shifted
-                return False
-
+    def clip_filter_objects(self, filter_radius=None):
+        N = self.object1p.shape[-1] // 2
+        if filter_radius is None:
+            # clip/filter region
+            filter_radius = int(N * 0.4)
+            self.object_1c = self.object1p
+            self.object_2c = self.object2p
         else:
-            raise ValueError(f"Invalid preference '{preference}'. Use 'auto', 'phase', or 'amplitude'.")
-
-        if verbose:
-            print("No alignment accepted — neither strategy improved both shift and error.")
-        return True
-
-
-    def clip_filter_objects(self):
-        self.object_1c = cropCenter(self.object1_processed, self.FRC_obj_size, shift_x=self.FRC_sx, shift_y=self.FRC_sy)
-        self.object_2c = cropCenter(self.object2_processed, self.FRC_obj_size, shift_x=self.FRC_sx, shift_y=self.FRC_sy)
+            # self.object_1c = self.object1p*rect_px(self.object1p.shape[-1], filter_radius * 2)
+            # self.object_2c = self.object2p*rect_px(self.object1p.shape[-1], filter_radius * 2)
+            self.object_1c = cropCenter(self.object1p, 2 * filter_radius)
+            self.object_2c = cropCenter(self.object2p, 2 * filter_radius)
 
     def show_clipped_objects(self):
         fig, axes = plt.subplots(1, 2)
@@ -1884,19 +1344,18 @@ class MyFRC:
         axes[1].set_axis_off()
         fig.tight_layout()
         fig.show()
-
-    def compute_custom_frc(self, mask, fft_image1, fft_image2):
-        if np.sum(mask) == 0:
+    def compute_custom_frc(self, slit_mask, fft_image1, fft_image2):
+        if np.sum(slit_mask) == 0:
             return  0
         else:
-            num = np.sum(np.conj(fft_image1[mask]) * fft_image2[mask])
+            num = np.sum(np.conj(fft_image1[slit_mask]) * fft_image2[slit_mask])
             den = np.sqrt(
-                np.sum(np.abs(fft_image1[mask]) ** 2) *
-                np.sum(np.abs(fft_image2[mask]) ** 2)
+                np.sum(np.abs(fft_image1[slit_mask]) ** 2) *
+                np.sum(np.abs(fft_image2[slit_mask]) ** 2)
             )
             return num / den if den != 0 else 0
 
-    def calculateFRC_bk(self):
+    def calculateFRC(self):
         y_shape = self.object_1c.shape[0]
         x_shape = self.object_1c.shape[1]
         R = self.object_1c.shape[0] / 2
@@ -1915,55 +1374,20 @@ class MyFRC:
         
         fft_image1 = fftshift(fft2(fftshift(self.object_1c * window_func)))
         fft_image2 = fftshift(fft2(fftshift(self.object_2c * window_func)))
-        # fft_image1 /= np.max(np.abs(fft_image1))
-        # fft_image2 /= np.max(np.abs(fft_image2))
-
-        # Apply same normalization BEFORE using fft_image1 and fft_image2
-        norm_factor = np.max(np.abs(fft_image2))  # or pick a consistent scale
-        fft_image1 /= norm_factor
-        fft_image2 /= norm_factor
-
+        fft_image1 /= np.max(np.abs(fft_image1))
+        fft_image2 /= np.max(np.abs(fft_image2))
         conj_image1 = np.conj(fft_image1)
-
-
-        self.prtf = np.zeros(int(np.min([x_shape, y_shape]) / 2), dtype=float)  # new array for PRTF
-        self.prtf_x1 = np.zeros_like(self.prtf)
-        self.prtf_x2 = np.zeros_like(self.prtf)
-        self.prtf_y = np.zeros_like(self.prtf)
-
-        for r in range(int(R)):
-            r += 1
-            ring = ringfunc(r, x_shape, y_shape)
-            ring_mask = ring.astype(bool)
-            N = np.sum(ring_mask)
-
-            # Compute radial average of |FFT_recon| and |FFT_measured|
-            amp_recon = np.abs(fft_image1[ring_mask])
-            amp_meas = np.abs(fft_image2[ring_mask])
-
-            # Add small epsilon to avoid division by zero
-            epsilon = 1e-10
-            ratio = amp_recon / (amp_meas + epsilon)
-
-            self.prtf[r - 1] = np.mean(ratio)
-
-        self.prtf = 1/self.prtf
-
 
         self.frc = np.zeros(int(np.min([x_shape, y_shape]) / 2), dtype=complex)
         self.frc_y = np.zeros_like(self.frc)
         self.frc_x1 = np.zeros_like(self.frc)
         self.frc_x2 = np.zeros_like(self.frc)
-        self.radial_ft1 = np.zeros_like(self.frc)
-        self.radial_ft2 = np.zeros_like(self.frc)
-
         self.one_bit_crit = np.zeros_like(self.frc)
         self.half_bit_crit = np.zeros_like(self.frc)
     
         for r in range(int(R)):
             r += 1
             ring = ringfunc(r, x_shape, y_shape)
-            ring_mask = ring.astype(bool)
             self.one_bit_crit[r-1] = one_bit_criterion(np.sum(ring))
             self.half_bit_crit[r-1] = half_bit_criterion(np.sum(ring))
             # check complex value/real value
@@ -1971,167 +1395,29 @@ class MyFRC:
 
             # X-axis slit: select pixels with angles near 0 or π.
             # (i.e. Fourier components along the horizontal axis)
-            slit_mask_x1 = ring_mask  & (np.abs(angle_grid) < tol)
-            slit_mask_x2 = ring_mask  & (np.abs(np.pi - np.abs(angle_grid)) < tol)
+            slit_mask_x1 = ring.astype(bool)  & (np.abs(angle_grid) < tol)
+            slit_mask_x2 = ring.astype(bool)  & (np.abs(np.pi - np.abs(angle_grid)) < tol)
             # Y-axis slit: select pixels with angles near π/2 or -π/2.
             # (i.e. Fourier components along the vertical axis)
-            slit_mask_y = ring_mask  & (
+            slit_mask_y = ring.astype(bool)  & (
                     (np.abs(angle_grid - np.pi / 2) < tol) | (np.abs(angle_grid + np.pi / 2) < tol)
             )
             self.frc_x1[r - 1] = self.compute_custom_frc(slit_mask_x1, fft_image1, fft_image2)
             self.frc_x2[r - 1] = self.compute_custom_frc(slit_mask_x2, fft_image1, fft_image2)
             self.frc_y[r - 1] = self.compute_custom_frc(slit_mask_y, fft_image1, fft_image2)
 
-            # 🔍 Add: Radially averaged FT magnitude
-            self.radial_ft1[r - 1] = np.mean(np.abs(fft_image1[ring_mask]))
-            self.radial_ft2[r - 1] = np.mean(np.abs(fft_image2[ring_mask]))
 
-    def compute_custom_prtf(self, mask, fft_recon, fft_meas):
-        if np.sum(mask) == 0:
-            return 0
-        amp_recon = np.abs(fft_recon[mask])
-        amp_meas = np.abs(fft_meas[mask])
-        epsilon = 1e-10
-        ratio = amp_recon / (amp_meas + epsilon)
-        return 1 / np.mean(ratio)
-
-    def calculateFRC(self, mode='complex'):
-        """
-        Compute FRC and PRTF between object_1c and object_2c.
-
-        Parameters
-        ----------
-        mode : str, optional
-            Which component of the complex field to use.
-            Options: 'complex' (default), 'amplitude', 'phase'
-        """
-        self.clip_filter_objects()
-        y_shape, x_shape = self.object_1c.shape
-        R = y_shape / 2
-
-        center_y, center_x = y_shape // 2, x_shape // 2
-        Y, X = np.indices((y_shape, x_shape))
-        dx = X - center_x
-        dy = Y - center_y
-        r_grid = np.sqrt(dx ** 2 + dy ** 2)
-        angle_grid = np.arctan2(dy, dx)
-        tol = np.deg2rad(15)
-
-        # Window function
-        window_func = np.hanning(y_shape).reshape(1, -1) * np.hanning(x_shape).reshape(-1, 1)
-
-        # Choose image input based on mode
-        if mode == 'amplitude':
-            im1 = np.abs(self.object_1c)
-            im2 = np.abs(self.object_2c)
-        elif mode == 'phase':
-            im1 = self.object_1c/np.abs(self.object_1c)
-            im2 = self.object_2c/np.abs(self.object_2c)
-
-        elif mode == 'complex':
-            im1 = self.object_1c
-            im2 = self.object_2c
-
-        else:
-            raise ValueError("Invalid mode. Choose from 'complex', 'amplitude', or 'phase'.")
-
-        # FFTs
-        fft_image1 = fftshift(fft2(fftshift(im1 * window_func)))
-        fft_image2 = fftshift(fft2(fftshift(im2 * window_func)))
-
-        # amp1 = np.abs(im1)
-        # amp2 = np.abs(im2)
-        # threshold = 0.1 * max(np.amax(amp1), np.amax(amp2))
-        # mask = (amp1 > threshold) & (amp2 > threshold)
-        #
-        # # Multiply both with mask before FFT
-        # fft_image1 = fftshift(fft2(fftshift(im1 * mask * window_func)))
-        # fft_image2 = fftshift(fft2(fftshift(im2 * mask * window_func)))
-
-        # fft_image1 = np.fft.fft2(im1*window_func, norm='ortho')
-        # fft_image2 = np.fft.fft2(im2*window_func, norm='ortho')
-
-        norm_factor1 = np.max(np.abs(fft_image1))
-        norm_factor2 = np.max(np.abs(fft_image2))
-
-        fft_image1 /= norm_factor1
-        fft_image2 /= norm_factor1
-        conj_image1 = np.conj(fft_image1)
-
-        n_rings = int(np.min([x_shape, y_shape]) / 2)
-
-        # Initialize outputs
-        self.frc = np.zeros(n_rings, dtype=complex)
-        self.frc_x1 = np.zeros_like(self.frc)
-        self.frc_x2 = np.zeros_like(self.frc)
-        self.frc_y = np.zeros_like(self.frc)
-
-        self.prtf = np.zeros_like(self.frc)
-        self.prtf_x1 = np.zeros_like(self.frc)
-        self.prtf_x2 = np.zeros_like(self.frc)
-        self.prtf_y = np.zeros_like(self.frc)
-
-        self.radial_ft1 = np.zeros_like(self.frc)
-        self.radial_ft2 = np.zeros_like(self.frc)
-
-        self.one_bit_crit = np.zeros_like(self.frc)
-        self.half_bit_crit = np.zeros_like(self.frc)
-
-        for r in range(n_rings):
-            r_index = r + 1
-            ring = ringfunc(r_index, x_shape, y_shape)
-            ring_mask = ring.astype(bool)
-
-            N = np.sum(ring_mask)
-            self.one_bit_crit[r] = one_bit_criterion(N)
-            self.half_bit_crit[r] = half_bit_criterion(N)
-
-            # FRC computation
-            self.frc[r] = np.sum(ring * conj_image1 * fft_image2) / np.sqrt(
-                np.sum(ring * np.abs(fft_image1) ** 2) * np.sum(ring * np.abs(fft_image2) ** 2)
-            )
-
-            # Radial magnitudes
-            self.radial_ft1[r] = np.mean(np.abs(fft_image1[ring_mask]))
-            self.radial_ft2[r] = np.mean(np.abs(fft_image2[ring_mask]))
-
-            # Global PRTF (1/PRTF convention)
-            amp_recon = np.abs(fft_image1[ring_mask])
-            amp_meas = np.abs(fft_image2[ring_mask])
-            epsilon = 1e-10
-            ratio = amp_recon / (amp_meas + epsilon)
-            self.prtf[r] = 1 / np.mean(ratio)
-
-            # Directional masks (X and Y)
-            slit_mask_x1 = ring_mask & (np.abs(angle_grid) < tol)
-            slit_mask_x2 = ring_mask & (np.abs(np.pi - np.abs(angle_grid)) < tol)
-            slit_mask_y = ring_mask & (
-                    (np.abs((np.pi / 2) - angle_grid) < tol) | (np.abs((-np.pi / 2) - angle_grid) < tol)
-            )
-
-            # Directional FRC and PRTF
-            self.frc_x1[r] = self.compute_custom_frc(slit_mask_x1, fft_image1, fft_image2)
-            self.frc_x2[r] = self.compute_custom_frc(slit_mask_x2, fft_image1, fft_image2)
-            self.frc_y[r] = self.compute_custom_frc(slit_mask_y, fft_image1, fft_image2)
-
-            self.prtf_x1[r] = self.compute_custom_prtf(slit_mask_x1, fft_image1, fft_image2)
-            self.prtf_x2[r] = self.compute_custom_prtf(slit_mask_x2, fft_image1, fft_image2)
-            self.prtf_y[r] = self.compute_custom_prtf(slit_mask_y, fft_image1, fft_image2)
 
     def plotFRC(self):
-        n_ticks = 5
+        n_ticks = 10
         fig, ax = plt.subplots(nrows=1, ncols=1, figsize=(4, 3), dpi=150)
         fig.suptitle(f'FRC')
         ax.plot(self.frc, label=f'FRC')
-        # ax.plot(self.frc_x1, label=f'FRC_x1')
-        # ax.plot(self.frc_x2, label=f'FRC_x2')
-        # ax.plot(self.frc_y, label=f'FRC_y')
-        # ax.plot(np.abs(np.angle(self.frc)), label=f'FRC_angle')
-        # ax.plot(np.abs(self.frc), label=f'FRC_abs')
-        ax.plot(self.one_bit_crit, '--', label='1 bit')
-        ax.plot(self.half_bit_crit, '--', label='1/2 bit')
-        # ax.axhline(0.5, color='gray', linestyle='--', linewidth=1, label='PRTF = 0.5')
+        ax.plot(self.frc_x1, label=f'FRC_x1')
+        ax.plot(self.frc_x2, label=f'FRC_x2')
+        ax.plot(self.frc_y, label=f'FRC_y')
 
+        ax.plot(self.half_bit_crit, '--', label='1/2 bit')
         self.qmax = 1 / (2 * self.dx * 1e6)
         self.Fx = np.round(np.linspace(0, self.qmax, n_ticks), decimals=3)
         plt.xticks(np.linspace(0, len(self.frc), n_ticks), labels=self.Fx)
@@ -2143,67 +1429,19 @@ class MyFRC:
         fig.tight_layout()
         fig.show()
 
-    def plotPRTF(self):
-        n_ticks = 5
-        fig, ax = plt.subplots(nrows=1, ncols=1, figsize=(4, 3), dpi=150)
-        fig.suptitle('PRTF')
-
-        # Plot global and directional PRTFs
-        ax.plot(self.prtf, label='PRTF')
-        # ax.plot(self.prtf_x1, label='PRTF_x1')
-        # ax.plot(self.prtf_x2, label='PRTF_x2')
-        # ax.plot(self.prtf_y, label='PRTF_y')
-
-        # Add threshold line
-        ax.axhline(0.5, color='gray', linestyle='--', linewidth=1, label='PRTF = 0.5')
-
-        # Set spatial frequency ticks
-        self.qmax = 1 / (2 * self.dx * 1e6)
-        self.Fx = np.round(np.linspace(0, self.qmax, n_ticks), decimals=3)
-        plt.xticks(np.linspace(0, len(self.prtf), n_ticks), labels=self.Fx)
-
-        ax.set_ylabel('PRTF')
-        ax.set_xlabel(r'Spatial freq. ($\mu m^{-1}$)')
-        ax.grid(alpha=0.5)
-        ax.minorticks_on()
-        ax.legend()
-        fig.tight_layout()
-        fig.show()
-
     def get_FRC_plot_data(self):
         return self.frc, self.half_bit_crit, self.dx
 
-    def get_spatial_resolution_prtf(self):
-        # Build your spatial frequency axis
-        qm = np.linspace(0, self.qmax, self.prtf.size)
-
-        # Find the first radial-frequency index where PRTF < 0.5
-        below = np.where(self.prtf < 0.5)[0]
-        if below.size > 0:
-            idx = below[0]
-        else:
-            # never falls below 0.5 → use the highest frequency
-            idx = qm.size - 1
-
-        # resolution = 1 / (2 * q)
-        res = 1.0 / (2.0 * qm[idx])
-        print(f'PRTF-based resolution: {res:.3f} µm')
-        return res
-
     def get_spatial_resolution(self):
-        # Build your spatial frequency axis
-        qm = np.linspace(0, self.qmax, self.frc.size)
-
-        # Find the first index where FRC < half-bit criterion
-        below = np.where(self.frc < self.half_bit_crit)[0]
-
-        if below.size > 0:
-            idx = below[0]
+        #half bit criteria
+        qm = np.linspace(0, self.qmax, self.frc.shape[-1])
+        index = np.argwhere(self.frc < self.half_bit_crit)
+        if len(index) > 0:
+            index= index[0]
+            res = 1 / (2 * qm[index])  # (um)
         else:
-            # never falls below criterion → use highest freq
-            idx = qm.size - 1
-
-        res = 1.0 / (2.0 * qm[idx])
+            res = 1 / (2 * qm[-1])  # (um)
+        print(f'resolution: {res} um')
         return res
 
     def get_res(self, index, qm):
@@ -2627,232 +1865,6 @@ class myPtychoSetup:
 
         return num/den
 
-def beatufy_axes(ax):
-    # Hide top and left spines
-    ax.spines['top'].set_visible(False)
-    ax.spines['right'].set_visible(False)
-
-    # Move bottom and right spines outward a bit
-    # ax.spines['bottom'].set_position(('outward', 5))
-    ax.spines['right'].set_position(('outward', 5))
-
-    # X-axis triangle arrowhead (→), at right edge
-    ax.arrow(
-        1, 0,  # x, y start (axes fraction)
-        0.02, 0,  # dx, dy (small x-shift)
-        head_width=0.02,
-        head_length=0.03,
-        fc='black', ec='black',
-        transform=ax.transAxes,
-        length_includes_head=True,
-        clip_on=False
-    )
-
-    # Y-axis triangle arrowhead (↑), at top edge
-    ax.arrow(
-        0, 1,  # x, y start (axes fraction)
-        0, 0.02,  # dx, dy (small y-shift)
-        head_width=0.02,
-        head_length=0.03,
-        fc='black', ec='black',
-        transform=ax.transAxes,
-        length_includes_head=True,
-        clip_on=False
-    )
-def plot_hist(myarray, title='', x_label='', cmap='RdBu_r', bins=None, step=0.335e-9, savename=None):
-    """
-    Plot a histogram where each bar is colored by its bin center using a colormap.
-
-    Parameters
-    ----------
-    myarray : array-like
-        Data to histogram.
-    title : str
-        Plot title.
-    x_label : str
-        X-axis label.
-    cmap : str or matplotlib.colors.Colormap
-        Colormap name (e.g. 'viridis', 'RdBu_r') or a Colormap instance.
-    bins : int or sequence of scalars, optional
-        If given, passed directly to np.histogram. If None, bins are computed
-        so each bin has width == `step`.
-    step : float
-        Target bin width. Must be in the same units as `myarray`. Default 0.335e-9.
-    savename : str or Path-like, optional
-        If provided, save the figure to this path.
-    """
-    pc1_flat = np.ravel(myarray)
-    pc1_flat = pc1_flat[~np.isnan(pc1_flat)]  # ignore NaNs
-
-    if pc1_flat.size == 0:
-        raise ValueError("`myarray` contains no finite values.")
-
-    # Build step-aligned bin edges if bins not specified
-    if bins is None:
-        if step <= 0:
-            raise ValueError("`step` must be positive.")
-        data_min = np.min(pc1_flat)
-        data_max = np.max(pc1_flat)
-
-        if data_min == data_max:
-            # Degenerate case: single-valued data -> make one bin centered on the value
-            half = step / 2.0
-            bins = np.array([data_min - half, data_min + half])
-        else:
-            # Align edges to multiples of `step` so every bin width == step
-            start = np.floor(data_min / step) * step
-            stop  = np.ceil(data_max  / step) * step
-            # Ensure the rightmost edge includes the max
-            bins = np.arange(start, stop + step * 0.5, step)
-
-    # Histogram data
-    hist_vals, bin_edges = np.histogram(pc1_flat, bins=bins)
-    bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
-
-    # Resolve the colormap
-    if isinstance(cmap, str):
-        cmap = matplotlib.cm.get_cmap(cmap)
-    elif not isinstance(cmap, matplotlib.colors.Colormap):
-        raise TypeError("`cmap` must be a string colormap name or a Colormap instance.")
-
-    # Normalize for colormap scaling
-    norm = matplotlib.colors.Normalize(vmin=bin_centers.min(), vmax=bin_centers.max())
-    colors = cmap(norm(bin_centers))
-
-    fig, ax = plt.subplots(figsize=(6.6, 4))
-
-    bar_width = (bin_edges[1] - bin_edges[0]) if len(bin_edges) > 1 else step
-    for i in range(len(hist_vals)):
-        ax.bar(bin_centers[i], hist_vals[i],
-               width=bar_width,
-               color=colors[i], edgecolor='gray', linewidth=0.5)
-
-    ax.set_title(title)
-    ax.set_xlabel(x_label)
-    ax.set_ylabel("Number of pixels")
-    ax.grid(True, alpha=0.5, linestyle=':')
-    ax.set_axisbelow(True)
-
-    beatufy_axes(ax)  # keeping your helper as-is
-
-    fig.tight_layout()
-
-    if savename is not None:
-        fig.savefig(savename, dpi=300, bbox_inches='tight')
-
-    plt.show()
-    return fig, ax, hist_vals, bin_centers
-
-def plot_hist2(myarray, title='', x_label='', cmap='RdBu_r', bins=100, savename=None):
-    """
-    Plot a histogram where each bar is colored by its bin center using a colormap.
-
-    Parameters
-    ----------
-    myarray : array-like
-        Data to histogram.
-    title : str
-        Plot title.
-    x_label : str
-        X-axis label.
-    cmap : str or matplotlib.colors.Colormap
-        Colormap **name** (e.g. 'viridis', 'RdBu_r') or a Colormap instance.
-    bins : int
-        Number of histogram bins.
-    savename : str or Path-like, optional
-        If provided, save the figure to this path.
-    """
-    pc1_flat = np.ravel(myarray)
-
-    # Histogram data
-    hist_vals, bin_edges = np.histogram(pc1_flat, bins=bins)
-    bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
-
-    # Resolve the colormap
-    if isinstance(cmap, str):
-        cmap = matplotlib.cm.get_cmap(cmap)
-    elif not isinstance(cmap, matplotlib.colors.Colormap):
-        raise TypeError("`cmap` must be a string colormap name or a Colormap instance.")
-
-    # Normalize for colormap scaling
-    norm = matplotlib.colors.Normalize(vmin=bin_centers.min(), vmax=bin_centers.max())
-    colors = cmap(norm(bin_centers))
-
-    fig, ax = plt.subplots(figsize=(6.6, 4))
-
-    bar_width = (bin_edges[1] - bin_edges[0])
-    for i in range(len(hist_vals)):
-        ax.bar(bin_centers[i], hist_vals[i],
-               width=bar_width,
-               color=colors[i], edgecolor='gray', linewidth=0.5)
-
-    ax.set_title(title)
-    ax.set_xlabel(x_label)
-    ax.set_ylabel("Number of pixels")
-    ax.grid(True, alpha=0.5, linestyle=':')
-    ax.set_axisbelow(True)
-
-    beatufy_axes(ax)
-
-    fig.tight_layout()
-
-    if savename is not None:
-        fig.savefig(savename, dpi=300, bbox_inches='tight')
-
-    plt.show()
-
-def plot_with_scalebar(data, dx=1, scalebar_size=10, cmap='RdBu', title='',
-                       vmin=None, vmax=None, scale_bar_color='black',label_cbar='',
-                       show_color_bar=True, dpi=100, save_path='', **kwargs):
-
-    if isinstance(cmap, str):
-        cmap = matplotlib.cm.get_cmap(cmap)
-    elif not isinstance(cmap, matplotlib.colors.Colormap):
-        raise TypeError("`cmap` must be a string colormap name or a Colormap instance.")
-
-    fig, ax = plt.subplots(dpi=dpi)
-    im = ax.imshow(data, cmap=cmap, vmin=vmin, vmax=vmax, **kwargs)
-    ax.set_title(title)
-    # Add scale bar (e.g., 5 µm corresponds to N pixels)
-    bar_length_pixels = int(scalebar_size / dx)  # Convert to pixels
-    scalebar = AnchoredSizeBar(ax.transData,
-                               size=bar_length_pixels,
-                               label=f'{scalebar_size*1e6:.1f} µm',
-                               loc='lower right',
-                               pad=0.5,
-                               color=scale_bar_color,
-                               frameon=False,
-                               size_vertical=int(data.shape[0]/50),
-                               fontproperties=fm.FontProperties(size=12), )
-    ax.add_artist(scalebar)
-    ax.set_xticks([])  # Remove x tick labels
-    ax.set_yticks([])  # Remove y tick labels
-    # Add colorbar
-    if show_color_bar:
-        cbar = fig.colorbar(im, ax=ax)
-        cbar.set_label(label_cbar)
-    fig.tight_layout()
-    if save_path:
-        fig.savefig(save_path, bbox_inches='tight', pad_inches=0, dpi=dpi)  # Save without frame
-    plt.show()
-
-def get_binary_cmap(cmap):
-    cmap = matplotlib.pyplot.get_cmap(cmap)
-    N = 256  # number of colors
-    colors = cmap(np.linspace(0, 1, N))
-
-    # 3. Convert colors to grayscale (lightness)
-    # Simple method: weighted average of RGB channels
-    # Using standard luminance formula
-    grayscale = np.dot(colors[:, :3], [0.299, 0.587, 0.114])
-
-    # 4. Build new grayscale colormap
-    # Expand back to RGB
-    gray_colors = np.vstack([grayscale, grayscale, grayscale]).T
-    gray_colors = np.hstack([gray_colors, colors[:, 3][:, np.newaxis]])  # preserve alpha channel
-
-    binary_flag = LinearSegmentedColormap.from_list('binary_flag', gray_colors)
-    return binary_flag
 
 
 if __name__ == "__main__":
