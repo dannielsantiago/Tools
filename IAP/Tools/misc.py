@@ -12,6 +12,10 @@ import scipy.ndimage as ndi
 from matplotlib.colors import LinearSegmentedColormap
 from scipy.ndimage import center_of_mass
 import multiprocessing
+from scipy.signal.windows import tukey
+import matplotlib
+from mpl_toolkits.axes_grid1.anchored_artists import AnchoredSizeBar
+import matplotlib.font_manager as fm
 
 
 def setCustomColorMap():
@@ -1946,6 +1950,233 @@ class myPtychoSetup:
         den = 1 + np.tan(np.deg2rad(theta))*np.tan(np.deg2rad(beta))
 
         return num/den
+
+def beatufy_axes(ax):
+    # Hide top and left spines
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+
+    # Move bottom and right spines outward a bit
+    # ax.spines['bottom'].set_position(('outward', 5))
+    ax.spines['right'].set_position(('outward', 5))
+
+    # X-axis triangle arrowhead (→), at right edge
+    ax.arrow(
+        1, 0,  # x, y start (axes fraction)
+        0.02, 0,  # dx, dy (small x-shift)
+        head_width=0.02,
+        head_length=0.03,
+        fc='black', ec='black',
+        transform=ax.transAxes,
+        length_includes_head=True,
+        clip_on=False
+    )
+
+    # Y-axis triangle arrowhead (↑), at top edge
+    ax.arrow(
+        0, 1,  # x, y start (axes fraction)
+        0, 0.02,  # dx, dy (small y-shift)
+        head_width=0.02,
+        head_length=0.03,
+        fc='black', ec='black',
+        transform=ax.transAxes,
+        length_includes_head=True,
+        clip_on=False
+    )
+def plot_hist(myarray, title='', x_label='', cmap='RdBu_r', bins=None, step=0.335e-9, savename=None):
+    """
+    Plot a histogram where each bar is colored by its bin center using a colormap.
+
+    Parameters
+    ----------
+    myarray : array-like
+        Data to histogram.
+    title : str
+        Plot title.
+    x_label : str
+        X-axis label.
+    cmap : str or matplotlib.colors.Colormap
+        Colormap name (e.g. 'viridis', 'RdBu_r') or a Colormap instance.
+    bins : int or sequence of scalars, optional
+        If given, passed directly to np.histogram. If None, bins are computed
+        so each bin has width == `step`.
+    step : float
+        Target bin width. Must be in the same units as `myarray`. Default 0.335e-9.
+    savename : str or Path-like, optional
+        If provided, save the figure to this path.
+    """
+    pc1_flat = np.ravel(myarray)
+    pc1_flat = pc1_flat[~np.isnan(pc1_flat)]  # ignore NaNs
+
+    if pc1_flat.size == 0:
+        raise ValueError("`myarray` contains no finite values.")
+
+    # Build step-aligned bin edges if bins not specified
+    if bins is None:
+        if step <= 0:
+            raise ValueError("`step` must be positive.")
+        data_min = np.min(pc1_flat)
+        data_max = np.max(pc1_flat)
+
+        if data_min == data_max:
+            # Degenerate case: single-valued data -> make one bin centered on the value
+            half = step / 2.0
+            bins = np.array([data_min - half, data_min + half])
+        else:
+            # Align edges to multiples of `step` so every bin width == step
+            start = np.floor(data_min / step) * step
+            stop  = np.ceil(data_max  / step) * step
+            # Ensure the rightmost edge includes the max
+            bins = np.arange(start, stop + step * 0.5, step)
+
+    # Histogram data
+    hist_vals, bin_edges = np.histogram(pc1_flat, bins=bins)
+    bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
+
+    # Resolve the colormap
+    if isinstance(cmap, str):
+        cmap = matplotlib.cm.get_cmap(cmap)
+    elif not isinstance(cmap, matplotlib.colors.Colormap):
+        raise TypeError("`cmap` must be a string colormap name or a Colormap instance.")
+
+    # Normalize for colormap scaling
+    norm = matplotlib.colors.Normalize(vmin=bin_centers.min(), vmax=bin_centers.max())
+    colors = cmap(norm(bin_centers))
+
+    fig, ax = plt.subplots(figsize=(6.6, 4))
+
+    bar_width = (bin_edges[1] - bin_edges[0]) if len(bin_edges) > 1 else step
+    for i in range(len(hist_vals)):
+        ax.bar(bin_centers[i], hist_vals[i],
+               width=bar_width,
+               color=colors[i], edgecolor='gray', linewidth=0.5)
+
+    ax.set_title(title)
+    ax.set_xlabel(x_label)
+    ax.set_ylabel("Number of pixels")
+    ax.grid(True, alpha=0.5, linestyle=':')
+    ax.set_axisbelow(True)
+
+    beatufy_axes(ax)  # keeping your helper as-is
+
+    fig.tight_layout()
+
+    if savename is not None:
+        fig.savefig(savename, dpi=300, bbox_inches='tight')
+
+    plt.show()
+    return fig, ax, hist_vals, bin_centers
+
+def plot_hist2(myarray, title='', x_label='', cmap='RdBu_r', bins=100, savename=None):
+    """
+    Plot a histogram where each bar is colored by its bin center using a colormap.
+
+    Parameters
+    ----------
+    myarray : array-like
+        Data to histogram.
+    title : str
+        Plot title.
+    x_label : str
+        X-axis label.
+    cmap : str or matplotlib.colors.Colormap
+        Colormap **name** (e.g. 'viridis', 'RdBu_r') or a Colormap instance.
+    bins : int
+        Number of histogram bins.
+    savename : str or Path-like, optional
+        If provided, save the figure to this path.
+    """
+    pc1_flat = np.ravel(myarray)
+
+    # Histogram data
+    hist_vals, bin_edges = np.histogram(pc1_flat, bins=bins)
+    bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
+
+    # Resolve the colormap
+    if isinstance(cmap, str):
+        cmap = matplotlib.cm.get_cmap(cmap)
+    elif not isinstance(cmap, matplotlib.colors.Colormap):
+        raise TypeError("`cmap` must be a string colormap name or a Colormap instance.")
+
+    # Normalize for colormap scaling
+    norm = matplotlib.colors.Normalize(vmin=bin_centers.min(), vmax=bin_centers.max())
+    colors = cmap(norm(bin_centers))
+
+    fig, ax = plt.subplots(figsize=(6.6, 4))
+
+    bar_width = (bin_edges[1] - bin_edges[0])
+    for i in range(len(hist_vals)):
+        ax.bar(bin_centers[i], hist_vals[i],
+               width=bar_width,
+               color=colors[i], edgecolor='gray', linewidth=0.5)
+
+    ax.set_title(title)
+    ax.set_xlabel(x_label)
+    ax.set_ylabel("Number of pixels")
+    ax.grid(True, alpha=0.5, linestyle=':')
+    ax.set_axisbelow(True)
+
+    beatufy_axes(ax)
+
+    fig.tight_layout()
+
+    if savename is not None:
+        fig.savefig(savename, dpi=300, bbox_inches='tight')
+
+    plt.show()
+
+def plot_with_scalebar(data, dx=1, scalebar_size=10, cmap='RdBu', title='',
+                       vmin=None, vmax=None, scale_bar_color='black',label_cbar='',
+                       show_color_bar=True, dpi=100, save_path='', **kwargs):
+
+    if isinstance(cmap, str):
+        cmap = matplotlib.cm.get_cmap(cmap)
+    elif not isinstance(cmap, matplotlib.colors.Colormap):
+        raise TypeError("`cmap` must be a string colormap name or a Colormap instance.")
+
+    fig, ax = plt.subplots(dpi=dpi)
+    im = ax.imshow(data, cmap=cmap, vmin=vmin, vmax=vmax, **kwargs)
+    ax.set_title(title)
+    # Add scale bar (e.g., 5 µm corresponds to N pixels)
+    bar_length_pixels = int(scalebar_size / dx)  # Convert to pixels
+    scalebar = AnchoredSizeBar(ax.transData,
+                               size=bar_length_pixels,
+                               label=f'{scalebar_size*1e6:.1f} µm',
+                               loc='lower right',
+                               pad=0.5,
+                               color=scale_bar_color,
+                               frameon=False,
+                               size_vertical=int(data.shape[0]/50),
+                               fontproperties=fm.FontProperties(size=12), )
+    ax.add_artist(scalebar)
+    ax.set_xticks([])  # Remove x tick labels
+    ax.set_yticks([])  # Remove y tick labels
+    # Add colorbar
+    if show_color_bar:
+        cbar = fig.colorbar(im, ax=ax)
+        cbar.set_label(label_cbar)
+    fig.tight_layout()
+    if save_path:
+        fig.savefig(save_path, bbox_inches='tight', pad_inches=0, dpi=dpi)  # Save without frame
+    plt.show()
+
+def get_binary_cmap(cmap):
+    cmap = matplotlib.pyplot.get_cmap(cmap)
+    N = 256  # number of colors
+    colors = cmap(np.linspace(0, 1, N))
+
+    # 3. Convert colors to grayscale (lightness)
+    # Simple method: weighted average of RGB channels
+    # Using standard luminance formula
+    grayscale = np.dot(colors[:, :3], [0.299, 0.587, 0.114])
+
+    # 4. Build new grayscale colormap
+    # Expand back to RGB
+    gray_colors = np.vstack([grayscale, grayscale, grayscale]).T
+    gray_colors = np.hstack([gray_colors, colors[:, 3][:, np.newaxis]])  # preserve alpha channel
+
+    binary_flag = LinearSegmentedColormap.from_list('binary_flag', gray_colors)
+    return binary_flag
 
 
 
