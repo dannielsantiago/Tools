@@ -40,6 +40,9 @@ def run_gold(wrapped_phase, infile='phase.float', outfile='uphase.float', format
 
     if maskfile is None:
         maskfile = 'none'
+    else:
+        maskfile.tofile('mask.bool')
+        maskfile = 'mask.bool'
 
     # Convert Python strings to C-compatible byte strings
     infile_ctypes = infile.encode('utf-8')
@@ -86,6 +89,10 @@ def run_qual(wrapped_phase, infile='phase.float', outfile='uphase.float', format
 
     if maskfile is None:
         maskfile = 'none'
+    else:
+        maskfile.tofile('mask.bool')
+        maskfile = 'mask.bool'
+
     if qualfile is None:
         qualfile = 'none'
 
@@ -138,6 +145,10 @@ def run_mcut(wrapped_phase, infile='phase.float', outfile='uphase.float', format
 
     if maskfile is None:
         maskfile = 'none'
+    else:
+        maskfile.tofile('mask.bool')
+        maskfile = 'mask.bool'
+
     if qualfile is None:
         qualfile = 'none'
 
@@ -193,6 +204,9 @@ def run_flyn(wrapped_phase, infile='phase.float', outfile='uphase.float', format
 
     if maskfile is None:
         maskfile = 'none'
+    else:
+        maskfile.tofile('mask.bool')
+        maskfile = 'mask.bool'
     if qualfile is None:
         qualfile = 'none'
 
@@ -249,6 +263,9 @@ def run_fmg(wrapped_phase, infile='phase.float', outfile='uphase.float', format=
 
     if maskfile is None:
         maskfile = 'none'
+    else:
+        maskfile.tofile('mask.bool')
+        maskfile = 'mask.bool'
     if qualfile is None:
         qualfile = 'none'
 
@@ -342,7 +359,11 @@ def run_pcg(wrapped_phase, infile='phase.float', outfile='uphase.float', format=
     xsize = wrapped_phase.shape[-1]
     ysize = wrapped_phase.shape[-2]
 
-    maskfile = maskfile or 'none'
+    if maskfile is None:
+        maskfile = 'none'
+    else:
+        maskfile.tofile('mask.bool')
+        maskfile = 'mask.bool'
     qualfile = qualfile or 'none'
 
     # Encode for ctypes
@@ -392,7 +413,11 @@ def run_lpno(wrapped_phase, infile='phase.float', outfile='uphase.float', format
     xsize = wrapped_phase.shape[-1]
     ysize = wrapped_phase.shape[-2]
 
-    maskfile = maskfile or 'none'
+    if maskfile is None:
+        maskfile = 'none'
+    else:
+        maskfile.tofile('mask.bool')
+        maskfile = 'mask.bool'
     qualfile = qualfile or 'none'
 
     args = [
@@ -400,7 +425,7 @@ def run_lpno(wrapped_phase, infile='phase.float', outfile='uphase.float', format
         maskfile.encode(), qualfile.encode(),
         xsize, ysize, tsize,
         quality_mode.encode(), debug_flag,
-        num_iter, pcg_iter, float(e0),
+        num_iter, pcg_iter, c_double(e0),
         thresh_flag, fatten
     ]
 
