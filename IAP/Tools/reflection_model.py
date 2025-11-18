@@ -14,7 +14,7 @@ def _tp(n1, n2, cos_i, cos_t):
 
 def _get_cos_t(n1,n2,sin_i):
     # Snell: n1*sin(theta_i) = n2*sin(theta_t) => cos(theta_t) = sqrt(1 - (n1/n2*sin)^2)
-    eta = ((n1 / n2) * sin_i).astype(np.complex128)
+    eta = ((n1 / n2) * sin_i)#.astype(np.complex128)
 
     cos_t = np.sqrt(1.0 - eta ** 2)
     # Physical branch: ensure Im(cos_tt) >= 0
@@ -59,7 +59,7 @@ def fresnel_rs_rp(n1, n2, theta_rad):
     rs = _rs(n1,n2, cos_i, cos_t)
     rp = _rp(n1,n2, cos_i, cos_t)
 
-    return rs, rp
+    return rs, -rp
 
 class element_crxo:
     def __init__(self, element):

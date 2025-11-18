@@ -2127,28 +2127,29 @@ def plot_hist2(myarray, title='', x_label='', cmap='RdBu_r', bins=100, savename=
 
 def plot_with_scalebar(data, dx=1, scalebar_size=10, cmap='RdBu', title='',
                        vmin=None, vmax=None, scale_bar_color='black',label_cbar='',
-                       show_color_bar=True, dpi=100, save_path='', **kwargs):
+                       show_color_bar=True, show_scale_bar=True, dpi=100, save_path='', figsize=(5,4), **kwargs):
 
     if isinstance(cmap, str):
         cmap = matplotlib.cm.get_cmap(cmap)
     elif not isinstance(cmap, matplotlib.colors.Colormap):
         raise TypeError("`cmap` must be a string colormap name or a Colormap instance.")
 
-    fig, ax = plt.subplots(dpi=dpi)
+    fig, ax = plt.subplots(dpi=dpi, figsize=figsize)
     im = ax.imshow(data, cmap=cmap, vmin=vmin, vmax=vmax, **kwargs)
     ax.set_title(title)
     # Add scale bar (e.g., 5 µm corresponds to N pixels)
     bar_length_pixels = int(scalebar_size / dx)  # Convert to pixels
-    scalebar = AnchoredSizeBar(ax.transData,
-                               size=bar_length_pixels,
-                               label=f'{scalebar_size*1e6:.1f} µm',
-                               loc='lower right',
-                               pad=0.5,
-                               color=scale_bar_color,
-                               frameon=False,
-                               size_vertical=int(data.shape[0]/50),
-                               fontproperties=fm.FontProperties(size=12), )
-    ax.add_artist(scalebar)
+    if show_scale_bar:
+        scalebar = AnchoredSizeBar(ax.transData,
+                                   size=bar_length_pixels,
+                                   label=f'{scalebar_size*1e6:.1f} µm',
+                                   loc='lower right',
+                                   pad=0.5,
+                                   color=scale_bar_color,
+                                   frameon=False,
+                                   size_vertical=int(data.shape[0]/50),
+                                   fontproperties=fm.FontProperties(size=12), )
+        ax.add_artist(scalebar)
     ax.set_xticks([])  # Remove x tick labels
     ax.set_yticks([])  # Remove y tick labels
     # Add colorbar
