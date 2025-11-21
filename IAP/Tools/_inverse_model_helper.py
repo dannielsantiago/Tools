@@ -100,6 +100,25 @@ def invert_eta_to_delta_beta(
         eta_pred[it.multi_index] = fresnel_eta_from_nc(it[0], theta_deg)
         it.iternext()
     err = np.abs(eta_pred - eta_meas)
+    if True:
+        import matplotlib.pyplot as plt
+        dmin, dmax = delta_range  # δ range
+        bmin, bmax = beta_range  # β range
+        plt.figure(figsize=(3.5,3), dpi=100)
+        plt.imshow(
+            err.T,
+            extent=[dmin, dmax, bmin, bmax],  # [xmin, xmax, ymin, ymax]
+            origin='lower',  # so that β increases upward
+            aspect='auto',  # adjust as you like
+            cmap='magma'  # or your preferred colormap
+        )
+
+        plt.xlabel('δ')
+        plt.ylabel('β')
+        plt.title('Error map across\n δ–β parameter space')
+        plt.colorbar(label='Error value')
+        plt.tight_layout()
+        plt.show()  # err = np.abs(eta_pred - np.conj(eta_meas)) #when using -1j*B convention
 
     i0, j0 = np.unravel_index(np.argmin(err), err.shape)
     d0, b0 = float(D[i0, j0]), float(B[i0, j0])
