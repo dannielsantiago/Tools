@@ -100,6 +100,8 @@ def invert_eta_to_delta_beta(
         eta_pred[it.multi_index] = fresnel_eta_from_nc(it[0], theta_deg)
         it.iternext()
     err = np.abs(eta_pred - eta_meas)
+    # err = abs(np.log(eta_pred) - np.log(eta_meas))
+
     if True:
         import matplotlib.pyplot as plt
         dmin, dmax = delta_range  # δ range
@@ -290,7 +292,7 @@ def solve_eta_linear_weighted(
     return num / den
 
 
-def estimate_eta_labels_from_q_soft(
+def estimate_eta_from_labels(
     q: np.ndarray,                 # (K,P)
     w_s: np.ndarray,               # (K,)
     w_p: np.ndarray,               # (K,)
@@ -386,6 +388,7 @@ def run_pipeline(
     # polarization weights & complex stack
     if w_s is None and w_p is None:
         w_s, w_p = polarization_weights(pol_angles_rad)
+
     R = to_complex_stack(amp_flat, phase_flat)
 
     # ratios against reference
@@ -404,7 +407,7 @@ def run_pipeline(
     rs0, rp0 = fresnel_rs_rp(1, nc_ref, np.deg2rad(theta_deg))
     eta_ref = rp0 / rs0
 
-    eta_by_label = estimate_eta_labels_from_q_soft(
+    eta_by_label = estimate_eta_from_labels(
         q, w_s, w_p, proba_flat, labels_pos,
         ref_k=ref_k, label_ref=label_ref, eta_ref=eta_ref,
         use_double_ratios=use_double_ratios,
