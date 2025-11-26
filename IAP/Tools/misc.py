@@ -1983,6 +1983,7 @@ def beatufy_axes(ax):
         length_includes_head=True,
         clip_on=False
     )
+
 def plot_hist(myarray, title='', x_label='', cmap='RdBu_r', bins=None, step=0.335e-9, savename=None):
     """
     Plot a histogram where each bar is colored by its bin center using a colormap.

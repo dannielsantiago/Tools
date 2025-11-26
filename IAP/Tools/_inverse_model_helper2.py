@@ -276,8 +276,20 @@ def estimate_eta_from_q_ratios(
     mu, sigma, neff = _soft_label_mean_qp(qp, proba_flat)
     stats_by_label: Dict[int, Tuple[complex,float,float]] = {}
     for i, L in enumerate(labels_pos):
-        stats_by_label[int(L)] = (mu[i], sigma[i], neff[i])
-        print(f"Label={L}\n mu={mu[i]}, sigma={sigma[i]}, neff={neff[i]}")
+        mu_val = mu[i]
+        sigma_val = sigma[i]
+        neff_val = neff[i]
+        sigma_mu = sigma_val / np.sqrt(max(neff_val, 1.0))
+
+        stats_by_label[int(L)] = (mu_val, sigma_val, neff_val)
+        print(
+            f"Label {L:>2d}:\n"
+            f"   μ        = {mu_val.real:+.5f} {mu_val.imag:+.5f}j\n"
+            f"   |μ|      = {abs(mu_val):.5f}\n"
+            f"   σ        = {sigma_val:.5f}        (heterogeneity)\n"
+            f"   σμ       = {sigma_mu:.5e}        (uncertainty of mean)\n"
+            f"   neff     = {neff_val:.0f}\n"
+        )
 
     eta_by_label: Dict[int, complex] = {}
     if use_double_ratios:
@@ -388,8 +400,6 @@ def mc_deltabeta_clouds(
 
         # standard error of the mean per label
         sigma_mu = sigma / np.sqrt(np.maximum(neff, 1.0))  # (M,)
-        sigma_mu = 50 * sigma / np.sqrt(neff)
-        sigma_mu = sigma **2
 
         iref = int(np.where(labels_pos == label_ref)[0][0])
 
@@ -406,8 +416,8 @@ def mc_deltabeta_clouds(
                 else:
                     eta = mu_draw[m]
 
-                if int(L) == int(label_ref):
-                    eta = eta_ref
+                # if int(L) == int(label_ref):
+                #     eta = eta_ref
 
                 d, b, _, _ = invert_eta_to_delta_beta(
                     eta, theta_deg, delta_range=delta_range, beta_range=beta_range

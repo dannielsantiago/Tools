@@ -170,7 +170,7 @@ def reflectivity_parratt(layers, wavelength, angle_deg, pol='s', angle_mode='gra
         if pol == 's':
             return (kiz - kz[1])/(kiz + kz[1])
         else:
-            return (kiz - kz[1]/(n[1]**2)) / (kiz + kz[1]/(n[1]**2))
+            return -(kiz - kz[1]/(n[1]**2)) / (kiz + kz[1]/(n[1]**2))
 
     # start at substrate interface (last finite -> substrate)
     if pol == 's':
@@ -178,7 +178,7 @@ def reflectivity_parratt(layers, wavelength, angle_deg, pol='s', angle_mode='gra
     else:
         b_up = kz[N-2]/(n[N-2]**2)
         b_dn = kz[N-1]/(n[N-1]**2)
-        r = (b_up - b_dn)/(b_up + b_dn)
+        r = -(b_up - b_dn)/(b_up + b_dn)
 
     # recurse upward through films i = N-3,...,1
     for i in range(N-3, 0, -1):
@@ -187,7 +187,7 @@ def reflectivity_parratt(layers, wavelength, angle_deg, pol='s', angle_mode='gra
         else:
             b_i   = kz[i]/(n[i]**2)
             b_ip1 = kz[i+1]/(n[i+1]**2)
-            r_i = (b_i - b_ip1)/(b_i + b_ip1)
+            r_i = -(b_i - b_ip1)/(b_i + b_ip1)
         p2 = 1.0 if (d[i+1] is None or d[i+1] == 0) else np.exp(2j * kz[i+1] * d[i+1])
         r  = (r_i + r*p2) / (1 + r_i*r*p2)
 
@@ -196,6 +196,9 @@ def reflectivity_parratt(layers, wavelength, angle_deg, pol='s', angle_mode='gra
         r0 = (kiz - kz[1])/(kiz + kz[1])
     else:
         r0 = (kiz - kz[1]/(n[1]**2)) / (kiz + kz[1]/(n[1]**2))
+        b0 = kiz / (n[0] ** 2)  # usually same as kiz if n[0]=1, but keep it general
+        b1 = kz[1] / (n[1] ** 2)
+        r0 = (b1 - b0) / (b1 + b0)
 
     p2_top = 1.0 if d[1] is None else np.exp(2j * kz[1] * d[1])
     return (r0 + r*p2_top) / (1 + r0*r*p2_top)
@@ -245,7 +248,7 @@ class MultilayerStack:
         Yin = (qs*A - C) / (D - qs*B)
         r = (q0 - Yin) / (q0 + Yin)
         if pol=='p':
-            r = -r
+            r = r
         return r
 
     def get_R(self, pol='s'):
@@ -344,7 +347,7 @@ class MultilayerStack2:
             if pol == 's':
                 return (kiz - kz[1])/(kiz + kz[1])
             else:  # p
-                return (kiz - kz[1]/(n[1]**2)) / (kiz + kz[1]/(n[1]**2))
+                return -(kiz - kz[1]/(n[1]**2)) / (kiz + kz[1]/(n[1]**2))
 
         # ---------- bottom interface (last finite film -> substrate)
         if pol == 's':
@@ -352,7 +355,7 @@ class MultilayerStack2:
         else:
             b_up = kz[N-2]/(n[N-2]**2)
             b_dn = kz[N-1]/(n[N-1]**2)
-            r = (b_up - b_dn)/(b_up + b_dn)
+            r = -(b_up - b_dn)/(b_up + b_dn)
 
         # ---------- climb upward through films i = N-3,...,1
         for i in range(N-3, 0, -1):
@@ -361,7 +364,7 @@ class MultilayerStack2:
             else:
                 b_i   = kz[i]/(n[i]**2)
                 b_ip1 = kz[i+1]/(n[i+1]**2)
-                r_i = (b_i - b_ip1)/(b_i + b_ip1)
+                r_i = -(b_i - b_ip1)/(b_i + b_ip1)
 
             p2 = 1.0 if (d[i+1] is None or d[i+1] == 0) else np.exp(2j * kz[i+1] * d[i+1])
             r  = (r_i + r*p2) / (1 + r_i*r*p2)
@@ -372,6 +375,9 @@ class MultilayerStack2:
             r0 = (kiz - kz[1])/(kiz + kz[1])
         else:
             r0 = (kiz - kz[1]/(n[1]**2)) / (kiz + kz[1]/(n[1]**2))
+            b0 = kiz / (n[0] ** 2)  # usually same as kiz if n[0]=1, but keep it general
+            b1 = kz[1] / (n[1] ** 2)
+            r0 = (b1 - b0) / (b1 + b0)
 
         p2_top = 1.0 if d[1] is None else np.exp(2j * kz[1] * d[1])
         return (r0 + r*p2_top) / (1 + r0*r*p2_top)
