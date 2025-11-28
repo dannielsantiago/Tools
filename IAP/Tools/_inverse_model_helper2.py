@@ -21,7 +21,7 @@ Author: ChatGPT
 from __future__ import annotations
 import numpy as np
 from typing import Dict, Tuple, Optional, Any
-
+from .reflection_model import MultilayerStack
 # --------------------------- Shape helpers --------------------------- #
 
 def _flatten_inputs(
@@ -68,23 +68,127 @@ def as_n(delta_map, beta_map):
 
 # ---------------------- Fresnel helpers (single interface) ---------------------- #
 
-def fresnel_rs_rp(nc: complex, theta_deg: float) -> Tuple[complex, complex]:
-    """Field Fresnel coefficients (vacuum -> medium with index nc) at theta from normal."""
-    theta = np.deg2rad(theta_deg)
-    cos_t = np.cos(theta)
-    sin_t2 = np.sin(theta) ** 2
-    gamma = np.sqrt(nc**2 - sin_t2)
-    if np.imag(gamma) < 0:
-        gamma = -gamma
-    rs = (cos_t - gamma) / (cos_t + gamma)
-    rp = (nc**2 * cos_t - gamma) / (nc**2 * cos_t + gamma)
-    return rs, rp
+# def fresnel_rs_rp(nc: complex, theta_deg: float) -> Tuple[complex, complex]:
+#     """Field Fresnel coefficients (vacuum -> medium with index nc) at theta from normal."""
+#     theta = np.deg2rad(theta_deg)
+#     cos_t = np.cos(theta)
+#     sin_t2 = np.sin(theta) ** 2
+#     gamma = np.sqrt(nc**2 - sin_t2)
+#     if np.imag(gamma) < 0:
+#         gamma = -gamma
+#     rs = (cos_t - gamma) / (cos_t + gamma)
+#     rp = (nc**2 * cos_t - gamma) / (nc**2 * cos_t + gamma)
+#     return rs, rp
 
+from .reflection_model import fresnel_rs_rp
 def fresnel_eta_from_nc(nc: complex, theta_deg: float) -> complex:
-    rs, rp = fresnel_rs_rp(nc, theta_deg)
-    return rp / rs
+    rs, rp = fresnel_rs_rp(1, nc, np.deg2rad(theta_deg))
+    return rp/rs
 
-def invert_eta_to_delta_beta(
+def invert_eta_to_thickness(
+    eta_meas: complex,
+    theta_deg: float,
+    wavelength: float,
+    substrate_n: complex,
+    contaminants_n: list,
+    contaminants_list: list,
+    label_idx: int,
+    thickness_range: Tuple[float, float]=(0.0, 6e-9),
+):
+    thickness_linspace = np.linspace(thickness_range[0],  thickness_range[1],  100)
+
+    def is_compound_list(a):
+        return bool(a) and all(isinstance(x, list) for x in a)
+
+    if not is_compound_list(contaminants_list):
+        eta_pred = np.zeros(shape=(len(contaminants_n), len(thickness_linspace)), dtype=complex)
+        for cont_idx, contaminant in enumerate(contaminants_n):
+            for t_idx, t in enumerate(thickness_linspace):
+                layers = [(1, None),
+                          (contaminant, t),
+                          (substrate_n, None)]
+                tmm_stack = MultilayerStack(
+                    layers=layers,
+                    wavelength_m=wavelength,
+                    angle_deg_from_normal=theta_deg
+                )
+                r_s = tmm_stack.get_r('s')
+                r_p = tmm_stack.get_r('p')
+                eta_pred[cont_idx, t_idx] = r_p/r_s
+
+        err = abs(eta_pred - eta_meas)
+        # err = np.angle(eta_pred -eta_meas)
+        # err2 = np.abs(eta_pred -eta_meas)
+
+        import matplotlib.pyplot as plt
+        plt.figure(figsize=(5, 3), dpi=100)
+        for n in range(len(contaminants_n)):
+            plt.plot(thickness_linspace*1e9, err[n],'--', label=contaminants_list[n])
+        plt.legend(loc=2, framealpha=1, title=f'Label {label_idx}')
+        plt.xlabel('thickness (nm)')
+        plt.ylabel('error (a.u)')
+        plt.grid(True, alpha=0.5)
+        plt.minorticks_on()
+        plt.tight_layout()
+        plt.show()
+    else:
+        eta_pred = np.zeros(shape=(len(thickness_linspace), len(thickness_linspace)), dtype=complex)
+        r_s = np.zeros_like(eta_pred)
+        r_p = np.zeros_like(eta_pred)
+
+        for t1_idx, t1 in enumerate(thickness_linspace):
+            for t2_idx, t2 in enumerate(thickness_linspace):
+                layers = [(1, None),
+                          (contaminants_n[0][0], t2),
+                          (contaminants_n[0][1], t1),
+                          (substrate_n, None)]
+                tmm_stack = MultilayerStack(
+                    layers=layers,
+                    wavelength_m=wavelength,
+                    angle_deg_from_normal=theta_deg
+                )
+                r_s[t2_idx, t1_idx] = tmm_stack.get_r('s')
+                r_p[t2_idx, t1_idx] = tmm_stack.get_r('p')
+                eta_pred[t2_idx, t1_idx] = r_p[t2_idx, t1_idx] / r_s[t2_idx, t1_idx]
+
+        err = abs(eta_pred - eta_meas)**0.5
+        i0, j0 = np.unravel_index(np.argmin(err), err.shape)
+
+        dmin, dmax = 0, max(thickness_linspace)*1e9  # t1 range
+        bmin, bmax = 0, max(thickness_linspace)*1e9  # t2 range
+        import matplotlib.pyplot as plt
+
+        plt.figure(figsize=(3.5, 3), dpi=100)
+        im= plt.imshow(
+            err,
+            extent=[dmin, dmax, bmin, bmax],  # [xmin, xmax, ymin, ymax]
+            origin='lower',  # so that β increases upward
+            aspect='auto',  # adjust as you like
+            cmap='magma'  # or your preferred colormap
+        )
+        plt.scatter(thickness_linspace[j0]*1e9,thickness_linspace[i0]*1e9, s=10, color='r')
+        ax = plt.gca()
+        text_str = f'{contaminants_list[0][1]}: {thickness_linspace[j0] * 1e9:.2f} nm\n' \
+                   f'{contaminants_list[0][0]}: {thickness_linspace[i0] * 1e9:.2f} nm'
+
+        ax.text(
+            0.01, 0.99, text_str,
+            transform=ax.transAxes,  # coordinates in axes (0–1)
+            ha='left', va='top'
+        )
+
+        plt.xlabel(f'{contaminants_list[0][1]} t (nm)')
+        plt.ylabel(f'{contaminants_list[0][0]} t (nm)')
+        plt.title(f'Error map across\n Label {label_idx}')
+        plt.colorbar(im, label='Error value')
+        plt.tight_layout()
+        plt.show()
+
+        return r_s[i0, j0], r_p[i0, j0], thickness_linspace[i0], thickness_linspace[j0]
+
+
+
+def invert_rho_to_delta_beta(
     eta_meas: complex,
     theta_deg: float,
     delta_range: Tuple[float, float]=(1e-6, 2e-1),
@@ -101,7 +205,7 @@ def invert_eta_to_delta_beta(
     eta_pred = np.vectorize(lambda z: fresnel_eta_from_nc(z, theta_deg))(nc_grid)
     err = np.abs(eta_pred - eta_meas)
 
-    if False:
+    if True:
         import matplotlib.pyplot as plt
         dmin, dmax = delta_range  # δ range
         bmin, bmax = beta_range  # β range
@@ -258,19 +362,19 @@ def _soft_label_mean_qp(
 
 # --------------------------- Eta estimation --------------------------- #
 
-def estimate_eta_from_q_ratios(
+def estimate_rho_from_q_ratios(
     qp: np.ndarray,               # (P,) complex ratios Rp/Rs
     proba_flat: np.ndarray,       # (M,P)
     labels_pos: np.ndarray,       # (M,)
     label_ref: int,
-    eta_ref: complex,
+    rho_ref: complex,
     use_double_ratios: bool=True,
 ) -> Tuple[Dict[int, complex], Dict[int, Tuple[complex,float,float]]]:
     """
     Estimate eta per label from qp means.
 
     Returns:
-      eta_by_label: dict[label] -> eta
+      rho_by_label: dict[label] -> eta
       stats_by_label: dict[label] -> (qp_mean, qp_sigma, neff)
     """
     mu, sigma, neff = _soft_label_mean_qp(qp, proba_flat)
@@ -291,7 +395,7 @@ def estimate_eta_from_q_ratios(
             f"   neff     = {neff_val:.0f}\n"
         )
 
-    eta_by_label: Dict[int, complex] = {}
+    rho_by_label: Dict[int, complex] = {}
     if use_double_ratios:
         # locate reference
         try:
@@ -300,13 +404,13 @@ def estimate_eta_from_q_ratios(
             raise ValueError("label_ref not found in labels_pos.")
         mu_ref = mu[iref]
         for i, L in enumerate(labels_pos):
-            eta_by_label[int(L)] = (mu[i] / (mu_ref + 1e-30)) * eta_ref
+            rho_by_label[int(L)] = (mu[i] / (mu_ref + 1e-30)) * rho_ref
     else:
         for i, L in enumerate(labels_pos):
-            eta_by_label[int(L)] = mu[i]
+            rho_by_label[int(L)] = mu[i]
     # lock reference exactly
-    eta_by_label[int(label_ref)] = eta_ref
-    return eta_by_label, stats_by_label
+    rho_by_label[int(label_ref)] = rho_ref
+    return rho_by_label, stats_by_label
 
 # --------------------------- Soft mixing per pixel --------------------------- #
 
@@ -328,8 +432,21 @@ def _per_pixel_phi_mat_ref_from_soft(
     M = proba_flat.shape[0]
     rs_per_label = np.zeros(M, dtype=np.complex128)
     for i, L in enumerate(labels_pos):
-        rs, _ = fresnel_rs_rp(nc_by_label[int(L)], theta_deg)
+        rs, _ = fresnel_rs_rp(1, nc_by_label[int(L)], np.deg2rad(theta_deg))
         rs_per_label[i] = rs
+    rs_mix = rs_per_label @ proba_flat  # (P,)
+    return np.angle(rs_mix)
+
+def _per_pixel_phi_mat_ref_from_ML(
+    rs_by_label: Dict[int, complex],
+    proba_flat: np.ndarray,
+    labels_pos: np.ndarray,
+) -> np.ndarray:
+    """Soft-mixed material phase at s-pol reference (k=0)."""
+    M = proba_flat.shape[0]
+    rs_per_label = np.zeros(M, dtype=np.complex128)
+    for i, L in enumerate(labels_pos):
+        rs_per_label[i] = rs_by_label[i]
     rs_mix = rs_per_label @ proba_flat  # (P,)
     return np.angle(rs_mix)
 
@@ -344,7 +461,7 @@ def mc_deltabeta_clouds(
     proba_flat: np.ndarray,         # (M,P)
     labels_pos: np.ndarray,         # (M,)
     label_ref: int,
-    eta_ref: complex,
+    rho_ref: complex,
     theta_deg: float,
     delta_range: Tuple[float,float],
     beta_range: Tuple[float,float],
@@ -383,11 +500,11 @@ def mc_deltabeta_clouds(
             mu_ref = mu_bs[iref]
             for m, L in enumerate(labels_pos):
                 if int(L) == int(label_ref):
-                    eta = eta_ref
+                    rho = rho_ref
                 else:
-                    eta = (mu_bs[m] / (mu_ref + 1e-30)) * eta_ref if use_double_ratios else mu_bs[m]
-                d,b,_,_ = invert_eta_to_delta_beta(
-                    eta, theta_deg, delta_range=delta_range, beta_range=beta_range
+                    rho = (mu_bs[m] / (mu_ref + 1e-30)) * rho_ref if use_double_ratios else mu_bs[m]
+                d,b,_,_ = invert_rho_to_delta_beta(
+                    rho, theta_deg, delta_range=delta_range, beta_range=beta_range
                 )
                 clouds[int(L)][t] = (d,b)
 
@@ -412,15 +529,15 @@ def mc_deltabeta_clouds(
             mu_ref_draw = mu_draw[iref]
             for m, L in enumerate(labels_pos):
                 if use_double_ratios:
-                    eta = (mu_draw[m] / (mu_ref_draw + 1e-30)) * eta_ref
+                    rho = (mu_draw[m] / (mu_ref_draw + 1e-30)) * rho_ref
                 else:
-                    eta = mu_draw[m]
+                    rho = mu_draw[m]
 
                 # if int(L) == int(label_ref):
                 #     eta = eta_ref
 
-                d, b, _, _ = invert_eta_to_delta_beta(
-                    eta, theta_deg, delta_range=delta_range, beta_range=beta_range
+                d, b, _, _ = invert_rho_to_delta_beta(
+                    rho, theta_deg, delta_range=delta_range, beta_range=beta_range
                 )
                 clouds[int(L)][t] = (d, b)
     else:
@@ -438,6 +555,11 @@ def run_pipeline(
     theta_deg: float,
     label_ref: int,
     nc_ref: complex,
+    substrate_n: list,
+    contaminants_n: list,
+    contaminants_list:list,
+    rho_ref: Optional[complex]=None,
+    rs_ref: Optional[complex]=None,
     proba: Optional[np.ndarray]=None,
     proba_labels: Optional[np.ndarray]=None,
     use_double_ratios: bool=True,
@@ -452,7 +574,7 @@ def run_pipeline(
     K=2 simplified pipeline with optional soft labels and MC clouds.
 
     Returns dict containing:
-      eta_by_label, stats_by_label (qp mean/std), nc_by_label, deltabeta_by_label,
+      rho_by_label, stats_by_label (qp mean/std), nc_by_label, deltabeta_by_label,
       delta_map, beta_map, phi_topo, height_nm, deltabeta_cloud_by_label (if n_mc>0).
     """
     # Flatten stacks (no labels here)
@@ -473,35 +595,46 @@ def run_pipeline(
     valid_ref = np.abs(Rs) > amp_thresh
     qp = np.full(P, np.nan + 1j*np.nan, dtype=np.complex128)
     qp[valid_ref] = Rp[valid_ref] / Rs[valid_ref]
-
     # Soft probabilities (or one-hot from labels)
     proba_flat, labels_pos = _flatten_labels_map(
         proba, info, labels=labels,
     )
 
     # Reference eta from known nc_ref
-    rs0, rp0 = fresnel_rs_rp(nc_ref, theta_deg)
-    eta_ref = rp0 / rs0
+    if rho_ref is None:
+        rs0, rp0 = fresnel_rs_rp(1, nc_ref, np.deg2rad(theta_deg))
+        rho_ref = rp0 / rs0
 
     # Estimate eta per label + store qp stats
-    eta_by_label, stats_by_label = estimate_eta_from_q_ratios(
-        qp, proba_flat, labels_pos, label_ref, eta_ref, use_double_ratios=use_double_ratios
+    rho_by_label, stats_by_label = estimate_rho_from_q_ratios(
+        qp, proba_flat, labels_pos, label_ref, rho_ref, use_double_ratios=use_double_ratios
     )
 
     # Invert eta -> (delta,beta)
     nc_by_label: Dict[int, complex] = {}
+    rs_by_label: Dict[int, complex] = {}
+    t_by_label: Dict[int, Tuple[float, float]] = {}
+
     deltabeta_by_label: Dict[int, Tuple[float,float]] = {}
     for L in labels_pos:
         if int(L) == int(label_ref):
             nc_by_label[int(L)] = complex(nc_ref)
             deltabeta_by_label[int(L)] = (float(1-np.real(nc_ref)), float(np.imag(nc_ref)))
+            rs_by_label[int(L)] = rs_ref
         else:
-            d,b,nc_hat,_ = invert_eta_to_delta_beta(
-                eta_by_label[int(L)], theta_deg,
+            # rs, rp, t1, t2 = invert_eta_to_thickness(
+            #     rho_by_label[int(L)], theta_deg, lam_nm,
+            #     substrate_n[int(L)],contaminants_n, contaminants_list, int(L))
+            # rs_by_label[int(L)] = rs
+            # t_by_label[int(L)] = (t1, t2)
+            d,b,nc_hat,_ = invert_rho_to_delta_beta(
+                rho_by_label[int(L)], theta_deg,
                 delta_range=delta_range, beta_range=beta_range
             )
             nc_by_label[int(L)] = nc_hat
             deltabeta_by_label[int(L)] = (d,b)
+
+
 
     # Per-pixel soft-mixed nc -> delta/beta maps
     nc_pix_flat = _per_pixel_nc_from_soft(nc_by_label, proba_flat, labels_pos)
@@ -513,6 +646,9 @@ def run_pipeline(
     phi_mat_ref_flat = _per_pixel_phi_mat_ref_from_soft(
         nc_by_label, proba_flat, labels_pos, theta_deg=theta_deg
     )
+    # phi_mat_ref_flat = _per_pixel_phi_mat_ref_from_ML(
+    #     rs_by_label, proba_flat, labels_pos,
+    # )
     phi_topo_flat = phi_ref_meas - phi_mat_ref_flat
     height_nm_flat = phase_to_height(phi_topo_flat, lam_nm=lam_nm, theta_deg=theta_deg)
 
@@ -525,14 +661,14 @@ def run_pipeline(
     # Optional MC clouds
     deltabeta_cloud_by_label = mc_deltabeta_clouds(
         qp=qp, proba_flat=proba_flat, labels_pos=labels_pos,
-        label_ref=label_ref, eta_ref=eta_ref, theta_deg=theta_deg,
+        label_ref=label_ref, rho_ref=rho_ref, theta_deg=theta_deg,
         delta_range=delta_range, beta_range=beta_range,
         n_mc=n_mc, mc_seed=mc_seed, mc_mode=mc_mode,
         stats_by_label=stats_by_label, use_double_ratios=use_double_ratios
     ) if n_mc > 0 else {int(L): None for L in labels_pos}
 
     return {
-        "eta_by_label": eta_by_label,
+        "eta_by_label": rho_by_label,
         "stats_by_label": stats_by_label,  # qp_mean, qp_sigma, neff
         "nc_by_label": nc_by_label,
         "deltabeta_by_label": deltabeta_by_label,
@@ -543,4 +679,76 @@ def run_pipeline(
         "labels_pos": labels_pos,
         "qp": qp,
         "deltabeta_cloud_by_label": deltabeta_cloud_by_label,
+    }
+
+
+def run_pipeline_simple(
+    amp_ref_stack: np.ndarray,      # (2,H,W) or (2,W)
+    phase_ref_stack: np.ndarray,    # same shape, unwrapped
+    labels: np.ndarray,             # hard labels (H,W) or (W,)
+    lam_nm: float,
+    theta_deg: float,
+    label_ref: int,
+    nc_ref: complex,
+    substrate_n: list,
+    contaminants_n: list,
+    contaminants_list:list,
+    rho_ref: Optional[complex]=None,
+    rs_ref: Optional[complex]=None,
+    proba: Optional[np.ndarray]=None,
+    proba_labels: Optional[np.ndarray]=None,
+    use_double_ratios: bool=True,
+    amp_thresh: float=0.0,
+    delta_range: Tuple[float,float]=(1e-3, 0.9),
+    beta_range: Tuple[float,float]=(1e-3, 0.9),
+    n_mc: int=0,
+    mc_seed: Optional[int]=None,
+    mc_mode: str="bootstrap_pixels",
+) -> Dict[str, Any]:
+    """
+    K=2 simplified pipeline with optional soft labels and MC clouds.
+
+    Returns dict containing:
+      rho_by_label, stats_by_label (qp mean/std), nc_by_label, deltabeta_by_label,
+      delta_map, beta_map, phi_topo, height_nm, deltabeta_cloud_by_label (if n_mc>0).
+    """
+    # Flatten stacks (no labels here)
+    amp_flat, phase_flat, info = _flatten_inputs(amp_ref_stack, phase_ref_stack)
+    K, P = amp_flat.shape
+
+    # Flatten labels for internal hard uses
+    if not info["is_1d"]:
+        H, W = info["img_shape"]
+        labels_flat = labels.reshape(H*W)
+    else:
+        W = info["img_shape"][0]
+        labels_flat = labels.reshape(W)
+
+    # Complex reflectivities and ratios
+    R = to_complex_stack(amp_flat, phase_flat)  # (2,P)
+    Rs, Rp = R[0], R[1]
+    valid_ref = np.abs(Rs) > amp_thresh
+    qp = np.full(P, np.nan + 1j*np.nan, dtype=np.complex128)
+    qp[valid_ref] = Rp[valid_ref] / Rs[valid_ref]
+    # Soft probabilities (or one-hot from labels)
+    proba_flat, labels_pos = _flatten_labels_map(
+        proba, info, labels=labels,
+    )
+
+    # Reference eta from known nc_ref
+    if rho_ref is None:
+        rs0, rp0 = fresnel_rs_rp(1, nc_ref, np.deg2rad(theta_deg))
+        rho_ref = rp0 / rs0
+
+    # Estimate eta per label + store qp stats
+    rho_by_label, stats_by_label = estimate_rho_from_q_ratios(
+        qp, proba_flat, labels_pos, label_ref, rho_ref, use_double_ratios=use_double_ratios
+    )
+
+    qp = _unflatten_image(qp, info)
+
+    return {
+        "rho_by_label": rho_by_label,
+        "stats_by_label": stats_by_label,  # qp_mean, qp_sigma, neff
+        "qp": qp,
     }
