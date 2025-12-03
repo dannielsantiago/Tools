@@ -21,10 +21,10 @@ def parse_formula(formula: str):
 
 def delta_beta_from_formula(
     formula: str,
-    density_g_cm3: float | None,
     energies_eV, *,
+    density_g_cm3: float | None,
     dataset: str = "chantler",
-    include_Z_in_f1: bool = False,   # set True to match CXRO (Henke) style
+    include_Z_in_f1: bool = True,   # set True to match CXRO (Henke) style
     return_n: bool = False           # if True, also return complex n
 ):
     """
@@ -45,7 +45,7 @@ def delta_beta_from_formula(
         if rho is None:
             raise ValueError(f"No density for {formula}; pass density_g_cm3 explicitly.")
         density_g_cm3 = float(rho)
-        print(f'{formula}: rho: {rho}')
+        # print(f'{formula}: rho: {rho}')
 
     # parse composition and molar mass of one formula unit
     comp = parse_formula(formula)

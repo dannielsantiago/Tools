@@ -22,6 +22,14 @@ def _get_cos_t(n1,n2,sin_i):
         cos_t = np.where(np.imag(cos_t) < 0, -cos_t, cos_t)
     return cos_t
 
+def kz_from_normal(n, th_deg):
+    th = np.deg2rad(th_deg)
+    # Enforce physical branch:
+    val = n*np.sqrt(1.0 - (np.sin(th)/n)**2)
+    # choose branch with Im(kz)>=0
+    if np.imag(val) < 0: val = -val
+    return val
+
 def _physical_sqrt(z):
     # sqrt with branch such that Im(sqrt) ≥ 0  (decaying into absorbing media)
     w = np.sqrt(np.asarray(z, dtype=np.complex128))
@@ -42,6 +50,19 @@ def _kz_physical(n, theta_from_normal_rad, k0):
     cosn = np.sqrt(1.0 - (s0/n)**2)
     cosn = np.where(np.imag(cosn) < 0, -cosn, cosn)
     return k0 * n * cosn
+
+def attenuation_length_from_kz(kz):
+    """
+    Attenuation length ℓ_att from kz:
+    intensity ∝ exp(-2 Im(kz) z), so ℓ_att = 1 / (2 Im(kz)).
+    """
+    kz = np.asarray(kz, dtype=np.complex128)
+    imkz = np.imag(kz)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        ell = 1.0 / (2.0 * imkz)
+    # non-absorbing → Im(kz)=0 → infinite attenuation length
+    ell = np.where(imkz > 0, ell, np.inf)
+    return ell
 
 def fresnel_rs_rp(n1, n2, theta_rad):
     """
@@ -227,6 +248,11 @@ class MultilayerStack:
                           for i,di in enumerate(d)], dtype=np.complex128)
         return kz, q, delta
 
+    def get_layer_attenuation_lengths(self):
+        n = np.array([n for n, _ in self.layers], dtype=np.complex128)
+        kz = _kz_physical(n, self.theta0, self.k0)  # same kz you use for TMM
+        return attenuation_length_from_kz(kz)  # one ℓ_att per layer
+
     @staticmethod
     def _film_M_q(delta_i, q_i):
         c, s = np.cos(delta_i), np.sin(delta_i)
@@ -383,13 +409,6 @@ class MultilayerStack2:
         return (r0 + r*p2_top) / (1 + r0*r*p2_top)
 
 
-def kz_from_normal(n, th_deg):
-    th = np.deg2rad(th_deg)
-    # Enforce physical branch:
-    val = n*np.sqrt(1.0 - (np.sin(th)/n)**2)
-    # choose branch with Im(kz)>=0
-    if np.imag(val) < 0: val = -val
-    return val
 
 def R_film(layers, wavelength, theta_deg, pol='s'):
     k0 = 2*np.pi/wavelength

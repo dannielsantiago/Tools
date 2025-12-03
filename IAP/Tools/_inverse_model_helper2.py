@@ -686,24 +686,13 @@ def run_pipeline_simple(
     amp_ref_stack: np.ndarray,      # (2,H,W) or (2,W)
     phase_ref_stack: np.ndarray,    # same shape, unwrapped
     labels: np.ndarray,             # hard labels (H,W) or (W,)
-    lam_nm: float,
     theta_deg: float,
     label_ref: int,
     nc_ref: complex,
-    substrate_n: list,
-    contaminants_n: list,
-    contaminants_list:list,
     rho_ref: Optional[complex]=None,
-    rs_ref: Optional[complex]=None,
     proba: Optional[np.ndarray]=None,
-    proba_labels: Optional[np.ndarray]=None,
     use_double_ratios: bool=True,
     amp_thresh: float=0.0,
-    delta_range: Tuple[float,float]=(1e-3, 0.9),
-    beta_range: Tuple[float,float]=(1e-3, 0.9),
-    n_mc: int=0,
-    mc_seed: Optional[int]=None,
-    mc_mode: str="bootstrap_pixels",
 ) -> Dict[str, Any]:
     """
     K=2 simplified pipeline with optional soft labels and MC clouds.
@@ -728,8 +717,14 @@ def run_pipeline_simple(
     R = to_complex_stack(amp_flat, phase_flat)  # (2,P)
     Rs, Rp = R[0], R[1]
     valid_ref = np.abs(Rs) > amp_thresh
+    valid_ref = np.abs(amp_flat[0]) > amp_thresh
+
     qp = np.full(P, np.nan + 1j*np.nan, dtype=np.complex128)
     qp[valid_ref] = Rp[valid_ref] / Rs[valid_ref]
+    tanPsi = amp_flat[1][valid_ref]/amp_flat[0][valid_ref]
+    Delta = phase_flat[1][valid_ref]-phase_flat[0][valid_ref]
+    qp[valid_ref] = tanPsi*np.exp(1j*Delta)
+
     # Soft probabilities (or one-hot from labels)
     proba_flat, labels_pos = _flatten_labels_map(
         proba, info, labels=labels,
@@ -751,4 +746,6 @@ def run_pipeline_simple(
         "rho_by_label": rho_by_label,
         "stats_by_label": stats_by_label,  # qp_mean, qp_sigma, neff
         "qp": qp,
+        'tanPsi': tanPsi,
+        'Delta': Delta,
     }
