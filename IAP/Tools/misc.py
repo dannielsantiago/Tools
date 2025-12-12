@@ -240,16 +240,45 @@ def circ_px(N, D):
 
 def rect_px(N, D):
     """
-    generate a rectngle on a 2D grid
-    :param N: lateral size of array in px
-    :param D: lateral size of square in px
-    :return: a 2D array
-    """
-    x = np.linspace(-N // 2, N // 2, N, endpoint=False).reshape(1, N)
-    y = x.reshape(N, 1)
-    square = (x**2 <= (D / 2)**2) * (y**2 <= (D / 2)**2)
-    return square
+    Generate a rectangle on a 2D grid.
 
+    Parameters
+    ----------
+    N : int or tuple of int
+        Lateral size of the array in px:
+          - If int: array is N x N.
+          - If (Ny, Nx): array is Ny x Nx.
+    D : int or tuple of int/float
+        Lateral size of the rectangle in px:
+          - If int/float: rectangle is D x D (square).
+          - If (Dy, Dx): rectangle is Dy (along y) x Dx (along x).
+
+    Returns
+    -------
+    rect : 2D ndarray of bool
+        Boolean mask with True inside the rectangle, False outside.
+    """
+
+    # Normalize N
+    if isinstance(N, int):
+        Ny = Nx = N
+    else:
+        Ny, Nx = N
+
+    # Normalize D
+    if isinstance(D, (int, float)):
+        Dy = Dx = D
+    else:
+        Dy, Dx = D
+
+    # 1D coordinate axes
+    x = np.linspace(-Nx // 2, Nx // 2, Nx, endpoint=False).reshape(1, Nx)
+    y = np.linspace(-Ny // 2, Ny // 2, Ny, endpoint=False).reshape(Ny, 1)
+
+    # Rectangle: independent bounds in x and y
+    rect = (x**2 <= (Dx / 2)**2) & (y**2 <= (Dy / 2)**2)
+
+    return rect
 
 def rect(arr, threshold = 0.5):
     """
@@ -956,17 +985,19 @@ def re_center_ptychogram(data, center_coord):
 
 
 
-
-def cropCenter(ptychogram, size, shift_x=None, shift_y=None, fill_value=0, center_of_mass_flag=False, flag_com_export=False):
+def cropCenter(ptychogram, size, shift_x=None, shift_y=None,
+               fill_value=0, center_of_mass_flag=False, flag_com_export=False):
     """
-    Crop (and, if needed, pad) an array in its last two dimensions to a square of side 'size'.
+    Crop (and, if needed, pad) an array in its last two dimensions.
 
-    Parameters:
-    -----------
+    Parameters
+    ----------
     ptychogram : ndarray
         Input array. The crop is applied to the last two dimensions.
-    size : int
-        Desired size (side length) of the cropped region.
+    size : int or tuple of int
+        Desired size of the cropped region:
+            - If int: square crop of side `size`.
+            - If (size_y, size_x): rectangular crop with given height and width.
     shift_x : int, optional
         Additional horizontal shift (applied after center calculation).
     shift_y : int, optional
@@ -977,19 +1008,30 @@ def cropCenter(ptychogram, size, shift_x=None, shift_y=None, fill_value=0, cente
         If True, the crop is centered on the center-of-mass computed from a 2D projection.
         For arrays with more than 2 dimensions, the projection is computed as the mean
         along the third dimension.
+    flag_com_export : bool, optional
+        If True, return (cropped, shift_y, shift_x). Otherwise, return just cropped.
 
-    Returns:
-    --------
+    Returns
+    -------
     cropped : ndarray
         The cropped (and possibly padded) array.
+    (cropped, shift_y, shift_x) if flag_com_export is True.
     """
+
+    # --- Normalize size argument to (size_y, size_x) ---
+    if isinstance(size, int):
+        size_y = size_x = size
+    else:
+        # Assuming tuple/list-like (size_y, size_x)
+        size_y, size_x = size
+
     # Get the spatial dimensions (last two dimensions)
     dim_y, dim_x = ptychogram.shape[-2], ptychogram.shape[-1]
 
     # Pad the array if the desired crop size exceeds the current dimensions.
-    if size > dim_y or size > dim_x:
-        pad_y = max(0, (size - dim_y) // 2)
-        pad_x = max(0, (size - dim_x) // 2)
+    if size_y > dim_y or size_x > dim_x:
+        pad_y = max(0, (size_y - dim_y) // 2)
+        pad_x = max(0, (size_x - dim_x) // 2)
         # Only pad the last two dimensions
         pad_width = ((0, 0),) * (ptychogram.ndim - 2) + ((pad_y, pad_y), (pad_x, pad_x))
         ptychogram = np.pad(ptychogram, pad_width, mode='constant', constant_values=fill_value)
@@ -1000,14 +1042,13 @@ def cropCenter(ptychogram, size, shift_x=None, shift_y=None, fill_value=0, cente
         # Compute a 2D projection if ptychogram has more than 2 dimensions.
         if ptychogram.ndim > 2:
             proj = np.mean(ptychogram, axis=0)**2
-            # proj = ptychogram[0]**2
+            # proj = ptychogram[0]**2   # original alternative
         else:
             proj = ptychogram**2
 
         # Use SciPy's center_of_mass to calculate the center.
         com = center_of_mass(proj)
-        print(com)
-        # If the computed center is invalid (e.g. if the sum is zero and results in NaNs), 
+        # If the computed center is invalid (e.g. if the sum is zero and results in NaNs),
         # default to the geometric center.
         if np.isnan(com[0]) or np.isnan(com[1]):
             com_y, com_x = dim_y // 2, dim_x // 2
@@ -1015,8 +1056,8 @@ def cropCenter(ptychogram, size, shift_x=None, shift_y=None, fill_value=0, cente
             com_y, com_x = com
 
         # Calculate the starting indices so that the crop is centered on the center of mass.
-        start_y = int(round(com_y)) - size // 2
-        start_x = int(round(com_x)) - size // 2
+        start_y = int(round(com_y)) - size_y // 2
+        start_x = int(round(com_x)) - size_x // 2
 
         if shift_y is not None:
             start_y += shift_y
@@ -1024,21 +1065,22 @@ def cropCenter(ptychogram, size, shift_x=None, shift_y=None, fill_value=0, cente
             start_x += shift_x
     else:
         # Use the geometric center.
-        start_y = dim_y // 2 - size // 2 + (shift_y if shift_y is not None else 0)
-        start_x = dim_x // 2 - size // 2 + (shift_x if shift_x is not None else 0)
+        start_y = dim_y // 2 - size_y // 2 + (shift_y if shift_y is not None else 0)
+        start_x = dim_x // 2 - size_x // 2 + (shift_x if shift_x is not None else 0)
+        # Keep original behavior: export shifts as None when COM is not used
         shift_x, shift_y = None, None
+
     # Ensure the starting indices are not negative.
     start_y = max(start_y, 0)
     start_x = max(start_x, 0)
 
     # Crop the array along the last two dimensions.
-    cropped = ptychogram[..., start_y: start_y + size, start_x: start_x + size]
+    cropped = ptychogram[..., start_y: start_y + size_y, start_x: start_x + size_x]
+
     if flag_com_export:
         return cropped, shift_y, shift_x
     else:
         return cropped
-
-
 def phase_ramp(slope_x, slope_y, offset, shape):
     """
     Adds a phase rampt to the object.
