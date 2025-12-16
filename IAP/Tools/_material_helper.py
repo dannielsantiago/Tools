@@ -42,6 +42,7 @@ def delta_beta_from_formula(
     # get density if not provided
     if density_g_cm3 is None and formula is not 'O2':
         mat, rho = xraydb.get_material(formula)
+        print(f'density {mat}: {rho}')
         if rho is None:
             raise ValueError(f"No density for {formula}; pass density_g_cm3 explicitly.")
         density_g_cm3 = float(rho)
