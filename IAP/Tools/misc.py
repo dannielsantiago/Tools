@@ -2335,7 +2335,7 @@ def make_masks_core_plus_rings(
 
     if return_edges:
         return masks, np.array(ring_edges_na, dtype=np.float32), edges_phi
-    return masks
+    return np.array(masks)
 
 
 if __name__ == "__main__":
