@@ -2292,29 +2292,26 @@ def make_masks_core_plus_rings(
 
     masks = []
 
-    # ---- Core disk (single mask)
+    # ---- Core disk
     r_core = (na_min / na_det)
     core = _soft_disk(r, rout=float(r_core), w=w) * pupil
     masks.append(core)
 
-    # ---- Rings (each thickness = na_min), sector-split
-    ring_edges_na = [0.0, float(na_min)]  # for optional return
+    ring_edges_na = [0.0, float(na_min)]
 
+    # ---- Rings (sector split)
     for k in range(n_rings):
         rin_na = na_min * (k + 1)
         rout_na = na_min * (k + 2)
-
         if rin_na >= na_det:
             break
-        rout_na = min(rout_na, na_det)  # clip, do NOT expand
+        rout_na = min(rout_na, na_det)
 
         rin = rin_na / na_det
         rout = rout_na / na_det
-
         ring_edges_na.append(float(rout_na))
 
         ring = _soft_bandpass(r, rin=float(rin), rout=float(rout), w=w) * pupil
-
         for j in range(n_sectors):
             p0, p1 = float(edges_phi[j]), float(edges_phi[j + 1])
             wedge = ((phi >= p0) & (phi < p1)).astype(np.float32)
@@ -2334,7 +2331,7 @@ def make_masks_core_plus_rings(
             ring_edges_na.append(float(na_det))
 
     if return_edges:
-        return masks, np.array(ring_edges_na, dtype=np.float32), edges_phi
+        return np.array(masks), np.array(ring_edges_na, dtype=np.float32), edges_phi
     return np.array(masks)
 
 
