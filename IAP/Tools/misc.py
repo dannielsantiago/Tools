@@ -2223,6 +2223,120 @@ def get_binary_cmap(cmap):
     return binary_flag
 
 
+def _smoothstep01(x):
+    x = np.clip(x, 0.0, 1.0)
+    return x * x * (3 - 2 * x)
+
+def _soft_disk(r, rout, w):
+    if w <= 0:
+        return (r <= rout).astype(np.float32)
+    return (1.0 - _smoothstep01((r - (rout - w)) / (2*w))).astype(np.float32)
+
+def _soft_bandpass(r, rin, rout, w):
+    if w <= 0:
+        return ((r >= rin) & (r <= rout)).astype(np.float32)
+    up = _smoothstep01((r - (rin - w)) / (2*w))
+    down = 1.0 - _smoothstep01((r - (rout - w)) / (2*w))
+    return (up * down).astype(np.float32)
+
+def make_masks_core_plus_rings(
+    N: int,
+    na_det: float,
+    na_min: float,
+    n_rings: int,
+    n_sectors: int,
+    ellipse_xy=(1.0, 1.0),
+    rotation_rad=np.pi/2,   # vertical sectors by default
+    soft_edge_frac=0.02,
+    include_residual_to_na_det: bool = False,  # optional: cover leftover annulus up to na_det
+    return_edges: bool = False,
+):
+    """
+    Outputs:
+      - 1 core disk mask: [0 .. na_min]
+      - n_rings annuli each of thickness na_min:
+            ring k = [na_min*(k+1) .. na_min*(k+2)] for k=0..n_rings-1
+        Each ring is split into n_sectors wedges.
+      - core is NOT split into sectors.
+
+    If include_residual_to_na_det=True, an extra outer annulus [last_edge .. na_det] is added (also sector-split).
+    """
+    if na_min <= 0 or na_det <= 0:
+        raise ValueError("na_min and na_det must be > 0")
+    if na_min > na_det:
+        raise ValueError("na_min must be <= na_det")
+    if n_rings < 0 or n_sectors < 1:
+        raise ValueError("n_rings must be >= 0 and n_sectors must be >= 1")
+
+    ax, ay = ellipse_xy
+
+    yy, xx = np.mgrid[:N, :N].astype(np.float32)
+    cx = (N - 1) / 2.0
+    cy = (N - 1) / 2.0
+    x = (xx - cx) / (N / 2.0)
+    y = (yy - cy) / (N / 2.0)
+
+    # r normalized: r=1 corresponds to na_det (elliptical pupil option)
+    r = np.sqrt((x / ax) ** 2 + (y / ay) ** 2).astype(np.float32)
+    pupil = (r <= 1.0).astype(np.float32)
+
+    # angle for wedge masks
+    phi = np.arctan2(y, x).astype(np.float32)
+    if rotation_rad != 0.0:
+        phi = np.arctan2(np.sin(phi - rotation_rad), np.cos(phi - rotation_rad)).astype(np.float32)
+
+    edges_phi = np.linspace(-np.pi, np.pi, n_sectors + 1, dtype=np.float32)
+
+    # soft edge width in normalized radius units
+    w = float(soft_edge_frac)
+
+    masks = []
+
+    # ---- Core disk (single mask)
+    r_core = (na_min / na_det)
+    core = _soft_disk(r, rout=float(r_core), w=w) * pupil
+    masks.append(core)
+
+    # ---- Rings (each thickness = na_min), sector-split
+    ring_edges_na = [0.0, float(na_min)]  # for optional return
+
+    for k in range(n_rings):
+        rin_na = na_min * (k + 1)
+        rout_na = na_min * (k + 2)
+
+        if rin_na >= na_det:
+            break
+        rout_na = min(rout_na, na_det)  # clip, do NOT expand
+
+        rin = rin_na / na_det
+        rout = rout_na / na_det
+
+        ring_edges_na.append(float(rout_na))
+
+        ring = _soft_bandpass(r, rin=float(rin), rout=float(rout), w=w) * pupil
+
+        for j in range(n_sectors):
+            p0, p1 = float(edges_phi[j]), float(edges_phi[j + 1])
+            wedge = ((phi >= p0) & (phi < p1)).astype(np.float32)
+            masks.append(ring * wedge)
+
+    # ---- Optional residual annulus to na_det (also sector-split)
+    if include_residual_to_na_det:
+        last_edge = ring_edges_na[-1]
+        if last_edge < na_det:
+            rin = last_edge / na_det
+            rout = 1.0
+            ring = _soft_bandpass(r, rin=float(rin), rout=float(rout), w=w) * pupil
+            for j in range(n_sectors):
+                p0, p1 = float(edges_phi[j]), float(edges_phi[j + 1])
+                wedge = ((phi >= p0) & (phi < p1)).astype(np.float32)
+                masks.append(ring * wedge)
+            ring_edges_na.append(float(na_det))
+
+    if return_edges:
+        return masks, np.array(ring_edges_na, dtype=np.float32), edges_phi
+    return masks
+
 
 if __name__ == "__main__":
     pass
