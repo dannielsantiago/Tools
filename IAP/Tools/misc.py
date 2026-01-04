@@ -2246,23 +2246,15 @@ def make_masks_core_plus_rings(
     n_rings: int,
     n_sectors: int,
     ellipse_xy=(1.0, 1.0),
-    rotation_rad=np.pi/2,   # vertical sectors by default
+    rotation_rad=np.pi/2,
     soft_edge_frac=0.02,
-    include_residual_to_na_det: bool = False,  # optional: cover leftover annulus up to na_det
+    include_residual_to_na_det: bool = False,
     return_edges: bool = False,
 ):
-    """
-    Outputs:
-      - 1 core disk mask: [0 .. na_min]
-      - n_rings annuli each of thickness na_min:
-            ring k = [na_min*(k+1) .. na_min*(k+2)] for k=0..n_rings-1
-        Each ring is split into n_sectors wedges.
-      - core is NOT split into sectors.
-
-    If include_residual_to_na_det=True, an extra outer annulus [last_edge .. na_det] is added (also sector-split).
-    """
-    if na_min <= 0 or na_det <= 0:
-        raise ValueError("na_min and na_det must be > 0")
+    if na_det <= 0:
+        raise ValueError("na_det must be > 0")
+    if na_min < 0:
+        raise ValueError("na_min must be >= 0")
     if na_min > na_det:
         raise ValueError("na_min must be <= na_det")
     if n_rings < 0 or n_sectors < 1:
@@ -2276,30 +2268,45 @@ def make_masks_core_plus_rings(
     x = (xx - cx) / (N / 2.0)
     y = (yy - cy) / (N / 2.0)
 
-    # r normalized: r=1 corresponds to na_det (elliptical pupil option)
     r = np.sqrt((x / ax) ** 2 + (y / ay) ** 2).astype(np.float32)
     pupil = (r <= 1.0).astype(np.float32)
 
-    # angle for wedge masks
     phi = np.arctan2(y, x).astype(np.float32)
     if rotation_rad != 0.0:
         phi = np.arctan2(np.sin(phi - rotation_rad), np.cos(phi - rotation_rad)).astype(np.float32)
 
     edges_phi = np.linspace(-np.pi, np.pi, n_sectors + 1, dtype=np.float32)
 
-    # soft edge width in normalized radius units
     w = float(soft_edge_frac)
 
+    # ---------- SPECIAL CASE: na_min == 0 -> only sectors over full pupil (WITH SOFT EDGE) ----------
+    if na_min == 0:
+        masks = []
+
+        # soft outer pupil edge (keeps your soft_edge_frac behavior)
+        pupil_soft = _soft_disk(r, rout=1.0, w=w)  # <-- soft at NA_det boundary
+
+        for j in range(n_sectors):
+            p0, p1 = float(edges_phi[j]), float(edges_phi[j + 1])
+            wedge = ((phi >= p0) & (phi < p1)).astype(np.float32)  # sector boundaries still sharp
+            masks.append(pupil_soft * wedge)
+
+        if return_edges:
+            ring_edges_na = np.array([0.0, float(na_det)], dtype=np.float32)
+            return np.array(masks), ring_edges_na, edges_phi
+        return np.array(masks)
+
+    # ---------- NORMAL CASE (your existing logic) ----------
     masks = []
 
-    # ---- Core disk
+    # Core disk
     r_core = (na_min / na_det)
     core = _soft_disk(r, rout=float(r_core), w=w) * pupil
     masks.append(core)
 
     ring_edges_na = [0.0, float(na_min)]
 
-    # ---- Rings (sector split)
+    # Rings (sector split)
     for k in range(n_rings):
         rin_na = na_min * (k + 1)
         rout_na = na_min * (k + 2)
@@ -2317,7 +2324,7 @@ def make_masks_core_plus_rings(
             wedge = ((phi >= p0) & (phi < p1)).astype(np.float32)
             masks.append(ring * wedge)
 
-    # ---- Optional residual annulus to na_det (also sector-split)
+    # Optional residual annulus to na_det (sector split)
     if include_residual_to_na_det:
         last_edge = ring_edges_na[-1]
         if last_edge < na_det:
