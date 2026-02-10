@@ -67,6 +67,8 @@ def delta_beta_from_formula(
         if dataset == "chantler":
             f1 = np.array([xraydb.f1_chantler(el, energy=float(eV)) for eV in E], dtype=float)
             f2 = np.array([xraydb.f2_chantler(el, energy=float(eV)) for eV in E], dtype=float)
+            print(f'f1 {el}: {f1}, n_j: {n_j}')
+            print(f'f2 {el}: {f2}, n_j: {n_j}')
         else:
             raise ValueError("Only 'chantler' dataset is wired here. (Easy to extend.)")
 

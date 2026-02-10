@@ -1115,12 +1115,25 @@ def ringfunc(r, y_shape, x_shape):
     ring = (ring - 1.) * -1.
     return ring
 
+"""
+Marin van Heel, Michael Schatz,
+Fourier shell correlation threshold criteria,
+Journal of Structural Biology,
+Volume 151, Issue 3,
+2005,
+Pages 250-262,
+ISSN 1047-8477,
+https://doi.org/10.1016/j.jsb.2005.05.009.
+"""
 def one_bit_criterion(N):
-    return (0.5 + 2.41/np.sqrt(N)) / (1.5 + 1.41/np.sqrt(N))
+    return (0.5 + 2.4142/np.sqrt(N)) / (1.5 + 1.412/np.sqrt(N))
 
 def half_bit_criterion(N):
-    return (0.2071 + 1.91 / np.sqrt(N)) / (1.2071 + 0.9102 / np.sqrt(N))
+    return (0.2071 + 1.9102 / np.sqrt(N)) / (1.2071 + 0.9102 / np.sqrt(N))
 
+def three_sigma_criteria(N):
+    #asuming asymetrical object. See above publication for details
+    return 3/np.sqrt(N/2)
 
 def error(reconstruction, simulation):
     return np.sum(np.abs(reconstruction - simulation) ** 2) / np.sum(np.abs(simulation) ** 2)
@@ -1716,8 +1729,11 @@ class MyFRC:
             im1 = np.abs(self.object_1c)
             im2 = np.abs(self.object_2c)
         elif mode == 'phase':
-            im1 = self.object_1c / np.abs(self.object_1c)
-            im2 = self.object_2c / np.abs(self.object_2c)
+            im1 = np.angle(self.object_1c)
+            im2 = np.angle(self.object_2c)
+
+            # im1 = self.object_1c / np.abs(self.object_1c)
+            # im2 = self.object_2c / np.abs(self.object_2c)
 
         elif mode == 'complex':
             im1 = self.object_1c
@@ -1727,8 +1743,10 @@ class MyFRC:
             raise ValueError("Invalid mode. Choose from 'complex', 'amplitude', or 'phase'.")
 
         # FFTs
-        fft_image1 = fftshift(fft2(fftshift(im1 * window_func)))
-        fft_image2 = fftshift(fft2(fftshift(im2 * window_func)))
+        # fft_image1 = fftshift(fft2(fftshift(im1 * window_func)))
+        # fft_image2 = fftshift(fft2(fftshift(im2 * window_func)))
+        fft_image1 = fft2c(im1 * window_func)
+        fft_image2 = fft2c(im2 * window_func)
 
         # amp1 = np.abs(im1)
         # amp2 = np.abs(im2)
@@ -1745,8 +1763,8 @@ class MyFRC:
         norm_factor1 = np.max(np.abs(fft_image1))
         norm_factor2 = np.max(np.abs(fft_image2))
 
-        fft_image1 /= norm_factor1
-        fft_image2 /= norm_factor1
+        # fft_image1 /= norm_factor1
+        # fft_image2 /= norm_factor2
         conj_image1 = np.conj(fft_image1)
 
         n_rings = int(np.min([x_shape, y_shape]) / 2)
@@ -1767,6 +1785,17 @@ class MyFRC:
 
         self.one_bit_crit = np.zeros_like(self.frc)
         self.half_bit_crit = np.zeros_like(self.frc)
+        self.three_sigma_crit = np.zeros_like(self.frc)
+
+        self.psd1 = np.zeros(n_rings, dtype=float)
+        self.psd2 = np.zeros(n_rings, dtype=float)
+        self.psd1_areadens = np.zeros(n_rings)
+        self.psd2_areadens = np.zeros(n_rings)
+        dfx = 1.0 / (x_shape * self.dx)
+        dfy = 1.0 / (y_shape * self.dx)
+        dA = dfx * dfy
+        self.psd_signal = np.zeros(n_rings)
+        self.psd_noise = np.zeros(n_rings)
 
         for r in range(n_rings):
             r_index = r + 1
@@ -1776,6 +1805,7 @@ class MyFRC:
             N = np.sum(ring_mask)
             self.one_bit_crit[r] = one_bit_criterion(N)
             self.half_bit_crit[r] = half_bit_criterion(N)
+            self.three_sigma_crit[r] = three_sigma_criteria(N)
 
             # FRC computation
             self.frc[r] = np.sum(ring * conj_image1 * fft_image2) / np.sqrt(
@@ -1783,8 +1813,29 @@ class MyFRC:
             )
 
             # Radial magnitudes
-            self.radial_ft1[r] = np.mean(np.abs(fft_image1[ring_mask]))
-            self.radial_ft2[r] = np.mean(np.abs(fft_image2[ring_mask]))
+            F1_ring = fft_image1[ring_mask]
+            F2_ring = fft_image2[ring_mask]
+            self.radial_ft1[r] = np.mean(np.abs(F1_ring))
+            self.radial_ft2[r] = np.mean(np.abs(F2_ring))
+            #  auto power per ring
+            P1 = np.mean(np.abs(F1_ring) ** 2)
+            P2 = np.mean(np.abs(F2_ring) ** 2)
+            self.psd1[r] = P1
+            self.psd2[r] = P2
+
+            # ring averaged cross term
+            C = np.real(np.mean(F1_ring * np.conj(F2_ring)))
+            S = C #signal
+
+            N = 0.5*(P1+P2) - C
+            self.psd_signal[r] = max(S, 0.0)  # clamp if needed
+            self.psd_noise[r] = max(N, 1e-30)
+            #
+            # area_ring = N * dA  # (cycles/m)^2
+            # P1 = np.sum(np.abs(fft_image1[ring_mask]) ** 2)  # sum, not mean
+            # P2 = np.sum(np.abs(fft_image2[ring_mask]) ** 2)
+            # self.psd1_areadens[r] = P1 / area_ring
+            # self.psd2_areadens[r] = P2 / area_ring
 
             # Global PRTF (1/PRTF convention)
             amp_recon = np.abs(fft_image1[ring_mask])
@@ -1809,24 +1860,74 @@ class MyFRC:
             self.prtf_x2[r] = self.compute_custom_prtf(slit_mask_x2, fft_image1, fft_image2)
             self.prtf_y[r] = self.compute_custom_prtf(slit_mask_y, fft_image1, fft_image2)
 
+        eps = 1e-30  # avoid log(0)
+        self.sig_db = 10 * np.log10((self.psd_signal + eps) / (np.max(self.psd_signal) + eps))
+        self.noi_db = 10 * np.log10((self.psd_noise +  eps) / (np.max(self.psd_signal) + eps))
+        self.noi_db_05 = 10 * np.log10((0.5*self.psd_noise + eps) / (np.max(self.psd_signal) + eps))
+        self.noi_db_021 = 10 * np.log10((0.21*self.psd_noise + eps) / (np.max(self.psd_signal) + eps))
+
+        self.FRCobj1 = im1
+        self.FRCobj2 = im2
+
+    def getFRCobjs(self):
+        return self.FRCobj1, self.FRCobj2
+    def getPSD(self):
+        return self.psd1, self.psd2
+
+    def get_sn_db(self):
+        return self.sig_db, self.noi_db
+
     def plotFRC(self):
+
         n_ticks = 5
         fig, ax = plt.subplots(nrows=1, ncols=1, figsize=(4, 3), dpi=150)
         fig.suptitle(f'FRC')
         ax.plot(self.frc, label=f'FRC')
+
+
+        # ax2 = ax.twinx()
+        # ax2.plot(self.sig_db,'g', label="Signal")
+        # ax2.plot(self.noi_db,'r', label="Noise")
+        # ax2.set_ylabel("Rel. ring power (dB)")
         # ax.plot(self.frc_x1, label=f'FRC_x1')
         # ax.plot(self.frc_x2, label=f'FRC_x2')
         # ax.plot(self.frc_y, label=f'FRC_y')
         # ax.plot(np.abs(np.angle(self.frc)), label=f'FRC_angle')
         # ax.plot(np.abs(self.frc), label=f'FRC_abs')
-        ax.plot(self.one_bit_crit, '--', label='1 bit')
+        # ax.plot(self.one_bit_crit, '--', label='1 bit')
         ax.plot(self.half_bit_crit, '--', label='1/2 bit')
+        ax.plot(self.three_sigma_crit,'--', label=r'3$\sigma$')
         # ax.axhline(0.5, color='gray', linestyle='--', linewidth=1, label='PRTF = 0.5')
 
         self.qmax = 1 / (2 * self.dx * 1e6)
         self.Fx = np.round(np.linspace(0, self.qmax, n_ticks), decimals=3)
         plt.xticks(np.linspace(0, len(self.frc), n_ticks), labels=self.Fx)
         ax.set_ylabel('FRC')
+        ax.set_xlabel(r'Spatial freq. ($\mu m^{-1}$)')
+        ax.grid(alpha=0.5)
+        ax.minorticks_on()
+
+        # lines1, labels1 = ax.get_legend_handles_labels()
+        # lines2, labels2 = ax2.get_legend_handles_labels()
+        # ax.legend(lines1 + lines2, labels1 + labels2, loc="best")
+        ax.legend()
+        fig.tight_layout()
+        fig.show()
+
+    def plotSN_dB(self):
+
+        n_ticks = 5
+        fig, ax = plt.subplots(nrows=1, ncols=1, figsize=(4, 3), dpi=150)
+        fig.suptitle(f'FRC')
+        ax.plot(self.sig_db,'g', label="Signal")
+        ax.plot(self.noi_db,'r', label="Noise")
+        ax.plot(self.noi_db_05, 'r', label="0.5N", alpha= 0.5)
+        ax.plot(self.noi_db_021, 'r', label="0.21N", alpha=0.3)
+
+        ax.set_ylabel("Rel. ring power (dB)")
+        self.qmax = 1 / (2 * self.dx * 1e6)
+        self.Fx = np.round(np.linspace(0, self.qmax, n_ticks), decimals=3)
+        plt.xticks(np.linspace(0, len(self.frc), n_ticks), labels=self.Fx)
         ax.set_xlabel(r'Spatial freq. ($\mu m^{-1}$)')
         ax.grid(alpha=0.5)
         ax.minorticks_on()
