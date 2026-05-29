@@ -82,7 +82,7 @@ def circ(x, y, D):
     :param y: 2D y coordinate, normally calculated from meshgrid: x,y = np.meshgird((,))
     :param D: diameter
     :return: a 2D array
-    """
+    """ 
     circle = (x ** 2 + y ** 2) < (D / 2) ** 2
     return circle
 

@@ -2,7 +2,10 @@ import os
 import numpy as np
 from scipy.interpolate import interp1d
 import xraydb
-
+try:
+    from periodictable.xsf import index_of_refraction as periodictable_index_of_refraction
+except ImportError:
+    periodictable_index_of_refraction = None
 def _rs(n1, n2, cos_i, cos_t):
     return (n1*cos_i - n2*cos_t) / (n1*cos_i + n2*cos_t)
 def _rp(n1, n2, cos_i, cos_t):
@@ -83,22 +86,64 @@ def fresnel_rs_rp(n1, n2, theta_rad):
     return rs, -rp
 
 class element_crxo:
-    def __init__(self, element):
-        self.element, self.rho = xraydb.get_material(element)
+    def __init__(self, element, rho=None, optical_constants_source="periodictable", low_energy_xraydb_cutoff_eV=30.0):
+        self.element, default_rho = xraydb.get_material(element)
+        self.rho = default_rho if rho is None else rho
+        self.optical_constants_source = optical_constants_source.lower()
+        self.low_energy_xraydb_cutoff_eV = low_energy_xraydb_cutoff_eV
 
     def get_rho(self):
         return self.rho
+
+    def _get_n_periodictable(self, energy):
+        if periodictable_index_of_refraction is None:
+            raise ImportError(
+                "periodictable is required for optical_constants_source='periodictable'. "
+                "Install periodictable or use optical_constants_source='xraydb'."
+            )
+        energy_keV = np.asarray(energy, dtype=float) / 1000.0
+        n = periodictable_index_of_refraction(self.element, density=self.rho, energy=energy_keV)
+        n = np.real(n) + 1j * np.abs(np.imag(n))
+        return complex(n) if np.isscalar(energy) else n
+
+    def _get_n_xraydb(self, energy):
+        delta, beta, _ = xraydb.xray_delta_beta(self.element, self.rho, energy)
+        return 1 - delta + 1j * beta
+
+    def _get_n_hybrid_periodictable(self, energy):
+        energy_array = np.atleast_1d(np.asarray(energy, dtype=float))
+        n = np.empty_like(energy_array, dtype=np.complex128)
+
+        if self.low_energy_xraydb_cutoff_eV is None:
+            use_xraydb = np.zeros_like(energy_array, dtype=bool)
+        else:
+            use_xraydb = energy_array < float(self.low_energy_xraydb_cutoff_eV)
+
+        if np.any(use_xraydb):
+            n[use_xraydb] = self._get_n_xraydb(energy_array[use_xraydb])
+        if np.any(~use_xraydb):
+            n[~use_xraydb] = self._get_n_periodictable(energy_array[~use_xraydb])
+
+        return complex(n[0]) if np.isscalar(energy) else n
+
     def get_n(self, energy):
-        delta, beta, _ = xraydb.xray_delta_beta(self.element, self.rho, energy)
-        n = 1-delta + 1j*beta
-        return n
+        if self.optical_constants_source in {"periodictable", "cxro", "crxo"}:
+            return self._get_n_hybrid_periodictable(energy)
+        if self.optical_constants_source == "xraydb":
+            return self._get_n_xraydb(energy)
+        raise ValueError("optical_constants_source must be 'periodictable'/'cxro' or 'xraydb'.")
+
     def get_delta_beta(self, energy):
-        delta, beta, _ = xraydb.xray_delta_beta(self.element, self.rho, energy)
+        n = self.get_n(energy)
+        delta = 1 - np.real(n)
+        beta = np.abs(np.imag(n))
+        if np.isscalar(energy):
+            return float(delta), float(beta)
         return delta, beta
 
     def get_rs_rp(self, angle_deg, energy):
         n = self.get_n(energy)
-        rs, rp = fresnel_rs_rp(n , np.deg2rad(angle_deg))
+        rs, rp = fresnel_rs_rp(1, n, np.deg2rad(angle_deg))
         return rs, rp
 
     def get_rs(self, angle_deg, energy):

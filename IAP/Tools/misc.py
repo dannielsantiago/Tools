@@ -1081,6 +1081,7 @@ def cropCenter(ptychogram, size, shift_x=None, shift_y=None,
         return cropped, shift_y, shift_x
     else:
         return cropped
+ 
 def phase_ramp(slope_x, slope_y, offset, shape):
     """
     Adds a phase rampt to the object.
