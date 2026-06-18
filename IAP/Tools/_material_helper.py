@@ -35,6 +35,7 @@ def delta_beta_from_formula(
     include_Z_in_f1: bool = True,   # set True to match CXRO (Henke) style
     return_n: bool = False,          # if True, also return complex n
     low_energy_xraydb_cutoff_eV: float | None = 30.0,
+    low_energy_xraydb_mode: str = "both",
 ):
     """
     Estimate optical constants from a chemical formula.
@@ -47,8 +48,11 @@ def delta_beta_from_formula(
     include_Z_in_f1: use f1_eff = Z + f1 for the xraydb source
     return_n: if True, return (delta, beta, n_complex)
     low_energy_xraydb_cutoff_eV: for periodictable/CXRO mode, energies below
-        this cutoff are evaluated with xraydb because periodictable can return
+        this cutoff use an xraydb fallback because periodictable can return
         invalid f1 sentinel values at very low energies. Set None to disable.
+    low_energy_xraydb_mode: "both" replaces delta and beta below the cutoff;
+        "delta_only" replaces only delta/f1-like behavior and keeps beta from
+        periodictable.
     """
     E = np.atleast_1d(np.asarray(energies_eV, dtype=float))
     source = source.lower()
@@ -137,18 +141,27 @@ def delta_beta_from_formula(
         return 1.0 - np.real(n_complex), np.abs(np.imag(n_complex))
 
     if source in {"cxro", "crxo", "periodictable"}:
-        delta = np.empty_like(E, dtype=float)
-        beta = np.empty_like(E, dtype=float)
+        low_energy_xraydb_mode = low_energy_xraydb_mode.lower()
+        if low_energy_xraydb_mode not in {"both", "delta_only"}:
+            raise ValueError("low_energy_xraydb_mode must be 'both' or 'delta_only'.")
 
         if low_energy_xraydb_cutoff_eV is None:
             use_xraydb = np.zeros_like(E, dtype=bool)
         else:
             use_xraydb = E < float(low_energy_xraydb_cutoff_eV)
 
-        if np.any(use_xraydb):
-            delta[use_xraydb], beta[use_xraydb] = _xraydb_delta_beta(E[use_xraydb])
-        if np.any(~use_xraydb):
-            delta[~use_xraydb], beta[~use_xraydb] = _periodictable_delta_beta(E[~use_xraydb])
+        if low_energy_xraydb_mode == "delta_only":
+            delta, beta = _periodictable_delta_beta(E)
+            if np.any(use_xraydb):
+                delta_xraydb, _ = _xraydb_delta_beta(E[use_xraydb])
+                delta[use_xraydb] = delta_xraydb
+        else:
+            delta = np.empty_like(E, dtype=float)
+            beta = np.empty_like(E, dtype=float)
+            if np.any(use_xraydb):
+                delta[use_xraydb], beta[use_xraydb] = _xraydb_delta_beta(E[use_xraydb])
+            if np.any(~use_xraydb):
+                delta[~use_xraydb], beta[~use_xraydb] = _periodictable_delta_beta(E[~use_xraydb])
 
     elif source == "xraydb":
         delta, beta = _xraydb_delta_beta(E)
